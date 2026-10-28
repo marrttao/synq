@@ -1,0 +1,9 @@
+/target
+/music/*
+/gifs/*
+!/music/.gitkeep
+!/gifs/.gitkeep
+/playlists/
+/favorites/
+/data/
+/config.toml
