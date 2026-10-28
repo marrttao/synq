@@ -2,6 +2,7 @@
 //! clock and the picker dialog (`g`).
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use image::DynamicImage;
@@ -19,6 +20,7 @@ use ratatui_image::{Resize, StatefulImage};
 use crate::visuals::{self, Animation, Clock, Command, Event};
 
 use super::blocks;
+use super::render::{self, Kind, Renderer};
 use super::{App, Mode, View};
 
 /// Decoded pictures kept besides the one on screen (e.g. other playlists').
@@ -117,17 +119,26 @@ impl VisualMode {
 /// Brightness ramp for the ASCII mode, dark to light.
 const RAMP: &[u8] = br#" .'`^",:;Il!i><~+_-?][}{1)(|\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$"#;
 
+/// A frame made for the panel, ready to show.
+enum Cached {
+    Blocks(blocks::Grid),
+    Ascii(Vec<Line<'static>>),
+    Pixels(StatefulProtocol),
+}
+
 pub(super) struct Active {
     name: String,
-    /// Frames as stored; the panel versions are made from them on demand.
-    images: Vec<DynamicImage>,
+    /// Frames as stored; the panel versions are made from them in the
+    /// background (see `render.rs`).
+    images: Arc<Vec<DynamicImage>>,
     delays: Vec<Duration>,
     clock: Clock,
-    /// Panel size (cells) the caches below were made for.
-    sized_for: (u16, u16, VisualFit, u8),
-    protocols: Vec<Option<StatefulProtocol>>,
-    block_grids: Vec<Option<blocks::Grid>>,
-    ascii: Vec<Option<Vec<Line<'static>>>>,
+    /// What the frames below were requested for, and which batch of jobs
+    /// they belong to.
+    key: Option<render::Key>,
+    generation: u64,
+    cache: Vec<Option<Cached>>,
+    pending: Vec<bool>,
 }
 
 impl Active {
@@ -138,24 +149,50 @@ impl Active {
             delays.push(f.delay);
             images.push(f.image);
         }
+        let n = images.len();
         Self {
             name,
-            protocols: (0..images.len()).map(|_| None).collect(),
-            block_grids: (0..images.len()).map(|_| None).collect(),
-            ascii: vec![None; images.len()],
-            images,
+            images: Arc::new(images),
             delays,
             clock: Clock::default(),
-            sized_for: (0, 0, VisualFit::Fill, 0),
+            key: None,
+            generation: 0,
+            cache: (0..n).map(|_| None).collect(),
+            pending: vec![false; n],
         }
     }
 
-    fn fit_caches(&mut self, size: (u16, u16, VisualFit, u8)) {
-        if self.sized_for != size {
-            self.sized_for = size;
-            self.protocols.iter_mut().for_each(|p| *p = None);
-            self.block_grids.iter_mut().for_each(|p| *p = None);
-            self.ascii.iter_mut().for_each(|a| *a = None);
+    /// The frame to show: the current one if it is ready, else the latest
+    /// earlier one (the picture then just holds still for a moment).
+    fn frame_to_show(&self, index: usize) -> Option<usize> {
+        let n = self.cache.len();
+        (0..n)
+            .map(|back| (index + n - back) % n)
+            .find(|&i| self.cache[i].is_some())
+    }
+
+    /// Frames that pixel pictures may keep: they are big.
+    fn keep_limit(key: &render::Key, frames: usize) -> usize {
+        match key.kind {
+            Kind::Pixels { width, height } => {
+                let bytes = (width as usize * height as usize * 4).max(1);
+                ((160usize << 20) / bytes).clamp(6, frames.max(6))
+            }
+            _ => frames,
+        }
+    }
+
+    /// Drop the frames furthest behind the current one when too many are kept.
+    fn evict(&mut self, index: usize) {
+        let Some(key) = self.key else { return };
+        let n = self.cache.len();
+        let limit = Self::keep_limit(&key, n);
+        let mut kept: Vec<usize> = (0..n).filter(|&i| self.cache[i].is_some()).collect();
+        // Furthest behind first, in playing order.
+        kept.sort_by_key(|&i| std::cmp::Reverse((index + n - i) % n));
+        let extra = kept.len().saturating_sub(limit);
+        for &i in kept.iter().take(extra) {
+            self.cache[i] = None;
         }
     }
 }
@@ -164,7 +201,13 @@ impl Active {
 /// how much of the picture (percent, of the side that overflows) the "fit"
 /// mode may cut off to make the picture bigger; the rest of the panel is
 /// filled with a blurred copy.
-fn scaled(image: &DynamicImage, w: u32, h: u32, fit: VisualFit, crop: u8) -> DynamicImage {
+pub(super) fn scaled(
+    image: &DynamicImage,
+    w: u32,
+    h: u32,
+    fit: VisualFit,
+    crop: u8,
+) -> DynamicImage {
     let (w, h) = (w.max(1), h.max(1));
     let filter = FilterType::CatmullRom;
     match fit {
@@ -218,7 +261,7 @@ fn scaled(image: &DynamicImage, w: u32, h: u32, fit: VisualFit, crop: u8) -> Dyn
 /// One text line per panel row, `cols` characters wide. The character
 /// follows the brightness (stretched to the picture's own range), its color
 /// is the pixel's and the cell background is a dark shade of it.
-fn ascii_lines(
+pub(super) fn ascii_lines(
     image: &DynamicImage,
     cols: u16,
     rows: u16,
@@ -309,6 +352,7 @@ pub(super) struct VisualState {
     pub(super) fit: VisualFit,
     /// How much the "fit" mode may cut off to make the picture bigger (percent).
     pub(super) crop: u8,
+    renderer: Renderer,
 }
 
 /// Stored as the global choice when the user picked "(none)", so that the
@@ -321,6 +365,7 @@ impl VisualState {
             mode,
             fit,
             crop: crop.min(90),
+            renderer: Renderer::spawn(&handle.picker),
             handle,
             global: None,
             per_playlist: HashMap::new(),
@@ -456,6 +501,7 @@ impl App {
         let now = Instant::now();
         let dt = now.duration_since(self.visual.last_tick).min(MAX_STEP);
         self.visual.last_tick = now;
+        self.take_rendered_frames();
 
         match self.desired_gif() {
             None => {
@@ -465,7 +511,8 @@ impl App {
             Some(name) => {
                 if self.visual.active.as_ref().is_none_or(|a| a.name != name) {
                     if let Some(i) = self.visual.spare.iter().position(|a| a.name == name) {
-                        let found = self.visual.spare.remove(i);
+                        let mut found = self.visual.spare.remove(i);
+                        found.key = None;
                         if let Some(old) = self.visual.active.replace(found) {
                             self.keep_spare(old);
                         }
@@ -487,6 +534,39 @@ impl App {
         }
     }
 
+    /// Frames the background threads have finished since the last time.
+    fn take_rendered_frames(&mut self) {
+        // A few per screen update: handing over a pixel frame is not free.
+        for _ in 0..8 {
+            let Ok(done) = self.visual.renderer.done.try_recv() else {
+                return;
+            };
+            let Some(active) = &mut self.visual.active else {
+                continue;
+            };
+            if active.generation != done.id || done.index >= active.cache.len() {
+                continue; // made for a size or picture that is gone
+            }
+            active.pending[done.index] = false;
+            active.cache[done.index] = Some(match done.output {
+                render::Output::Blocks(grid) => Cached::Blocks(grid),
+                render::Output::Ascii(lines) => Cached::Ascii(lines),
+                render::Output::Pixels(proto) => Cached::Pixels(proto),
+            });
+            let index = active.clock.index();
+            active.evict(index);
+        }
+    }
+
+    /// Is any frame of the current picture ready to show? (For tests.)
+    #[cfg(test)]
+    pub(super) fn picture_ready(&self) -> bool {
+        self.visual
+            .active
+            .as_ref()
+            .is_some_and(|a| a.cache.iter().any(Option::is_some))
+    }
+
     /// `overlapped`: another panel lies over this one.
     pub(super) fn draw_visual(&mut self, f: &mut Frame, area: Rect, overlapped: bool) {
         let title = match &self.visual.active {
@@ -502,54 +582,74 @@ impl App {
         let graphics = self.visual.handle.picker.protocol_type() != ProtocolType::Halfblocks;
         let mode = self.visual.mode.effective(overlapped, graphics);
         let (fit, crop) = (self.visual.fit, self.visual.crop);
-        if let Some(active) = &mut self.visual.active
+        let font = self.visual.handle.picker.font_size();
+        let background = match self.theme.background {
+            Color::Rgb(r, g, b) => [r, g, b],
+            _ => [0, 0, 0],
+        };
+        let VisualState {
+            active, renderer, ..
+        } = &mut self.visual;
+        if let Some(active) = active
             && !active.images.is_empty()
         {
-            active.fit_caches((inner.width, inner.height, fit, crop));
-            let index = active.clock.index().min(active.images.len() - 1);
-            match mode {
-                VisualMode::Ascii => {
-                    let lines = active.ascii[index].get_or_insert_with(|| {
-                        ascii_lines(&active.images[index], inner.width, inner.height, fit, crop)
+            let n = active.images.len();
+            let index = active.clock.index().min(n - 1);
+            let kind = match mode {
+                VisualMode::Ascii => Kind::Ascii,
+                VisualMode::Blocks => Kind::Blocks,
+                VisualMode::Picture => Kind::Pixels {
+                    width: u32::from(inner.width) * u32::from(font.width),
+                    height: u32::from(inner.height) * u32::from(font.height),
+                },
+            };
+            let key = render::Key {
+                cols: inner.width,
+                rows: inner.height,
+                fit,
+                crop,
+                kind,
+            };
+            if active.key != Some(key) {
+                // Another size or style: everything made so far is stale.
+                active.key = Some(key);
+                active.generation = renderer.new_generation();
+                active.cache.iter_mut().for_each(|c| *c = None);
+                active.pending.iter_mut().for_each(|p| *p = false);
+            }
+            // Ask for this frame and the next few; pixel frames are heavy,
+            // so only a few are made ahead.
+            let ahead = if matches!(kind, Kind::Pixels { .. }) {
+                3
+            } else {
+                24
+            }
+            .min(n);
+            for k in 0..ahead {
+                let i = (index + k) % n;
+                if active.cache[i].is_none() && !active.pending[i] {
+                    active.pending[i] = true;
+                    renderer.request(render::Job {
+                        id: active.generation,
+                        index: i,
+                        images: Arc::clone(&active.images),
+                        key,
+                        background,
                     });
-                    f.render_widget(Paragraph::new(lines.clone()), inner);
                 }
-                VisualMode::Blocks => {
-                    let bg = match self.theme.background {
-                        Color::Rgb(r, g, b) => [r, g, b],
-                        _ => [0, 0, 0],
-                    };
-                    let grid = active.block_grids[index].get_or_insert_with(|| {
-                        let img = scaled(
-                            &active.images[index],
-                            u32::from(inner.width) * 2,
-                            u32::from(inner.height) * 2,
-                            fit,
-                            crop,
-                        )
-                        .to_rgba8();
-                        blocks::quadrants(&img, inner.width, inner.height, bg)
-                    });
-                    blocks::paint(f.buffer_mut(), inner, grid);
-                }
-                VisualMode::Picture => {
-                    let picker = &self.visual.handle.picker;
-                    let proto = active.protocols[index].get_or_insert_with(|| {
-                        let font = picker.font_size();
-                        let filled = scaled(
-                            &active.images[index],
-                            u32::from(inner.width) * u32::from(font.width),
-                            u32::from(inner.height) * u32::from(font.height),
-                            fit,
-                            crop,
-                        );
-                        picker.new_resize_protocol(filled)
-                    });
-                    f.render_stateful_widget(
+            }
+            if let Some(show) = active.frame_to_show(index) {
+                match &mut active.cache[show] {
+                    Some(Cached::Ascii(lines)) => {
+                        f.render_widget(Paragraph::new(lines.clone()), inner);
+                    }
+                    Some(Cached::Blocks(grid)) => blocks::paint(f.buffer_mut(), inner, grid),
+                    Some(Cached::Pixels(proto)) => f.render_stateful_widget(
                         StatefulImage::<StatefulProtocol>::default().resize(Resize::Fit(None)),
                         inner,
                         proto,
-                    );
+                    ),
+                    None => {}
                 }
             }
             return;
@@ -773,6 +873,18 @@ mod tests {
         terminal.backend().buffer().clone()
     }
 
+    /// Frames are made in the background: draw until one is ready.
+    fn settled(app: &mut App, w: u16, h: u16) -> ratatui::buffer::Buffer {
+        render(app, w, h); // asks for the frames
+        let end = Instant::now() + Duration::from_secs(10);
+        while !app.picture_ready() && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(10));
+            app.tick_visuals();
+        }
+        assert!(app.picture_ready(), "a frame was made");
+        render(app, w, h)
+    }
+
     fn setup() -> (tempfile::TempDir, Paths) {
         let tmp = tempfile::tempdir().unwrap();
         let paths = Paths::new(tmp.path().to_path_buf());
@@ -819,7 +931,7 @@ mod tests {
         assert!(text(&buf).contains("Visual: a.gif"));
         // With "fill" the picture covers the whole panel, not a part of it.
         app.visual.fit = VisualFit::Fill;
-        let buf = render(&mut app, 120, 30);
+        let buf = settled(&mut app, 120, 30);
         let red = ratatui::style::Color::Rgb(255, 0, 0);
         let painted = buf
             .content()
@@ -831,7 +943,7 @@ mod tests {
 
         // ASCII mode draws characters instead.
         app.visual.mode = VisualMode::Ascii;
-        let buf = render(&mut app, 120, 30);
+        let buf = settled(&mut app, 120, 30);
         let tinted = buf
             .content()
             .iter()
@@ -1015,5 +1127,36 @@ mod fit_tests {
         assert_eq!(VisualFit::from_config("???"), VisualFit::Fit);
         assert_eq!(VisualFit::from_config("fill"), VisualFit::Fill);
         assert_eq!(VisualFit::Fill.cycle().cycle().cycle(), VisualFit::Fill);
+    }
+}
+
+#[cfg(test)]
+mod bench {
+    use super::*;
+    use std::time::Instant;
+
+    /// Not a test: `cargo test --release bench_scaled -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_scaled() {
+        let img = DynamicImage::ImageRgba8(image::RgbaImage::from_fn(360, 640, |x, y| {
+            image::Rgba([(x % 256) as u8, (y % 256) as u8, ((x * y) % 256) as u8, 255])
+        }));
+        for (name, w, h) in [
+            ("blocks 240x100 cells", 480, 200),
+            ("pixels 1500x900", 1500, 900),
+        ] {
+            for fit in [VisualFit::Fit, VisualFit::Fill] {
+                let n = 10;
+                let t = Instant::now();
+                for _ in 0..n {
+                    std::hint::black_box(scaled(&img, w, h, fit, 35));
+                }
+                eprintln!(
+                    "{name:<22} {fit:?}: {:>7.2} ms per frame",
+                    t.elapsed().as_secs_f64() * 1000.0 / n as f64
+                );
+            }
+        }
     }
 }

@@ -693,6 +693,8 @@ fn the_lyrics_have_a_dark_backdrop_over_the_picture() {
     app.layouts.save(l).unwrap();
     app.visual.mode = VisualMode::Blocks;
     let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
+    t.draw(|f| app.draw(f)).unwrap(); // asks for the frames, made in the background
+    pump(&mut app, "a frame is ready", |a| a.picture_ready());
     t.draw(|f| app.draw(f)).unwrap();
     let buf = t.backend().buffer().clone();
     // The picture is pure red; behind the lyrics it is darkened towards the

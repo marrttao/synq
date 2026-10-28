@@ -14,6 +14,7 @@ mod menu_view;
 mod palette;
 mod palette_view;
 mod player;
+mod render;
 mod spectrum;
 #[cfg(test)]
 mod stage10_tests;
