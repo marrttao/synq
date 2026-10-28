@@ -5,6 +5,8 @@ mod draw;
 mod effects;
 mod help;
 mod keys_view;
+mod layout;
+mod layout_view;
 mod lyrics_view;
 mod player;
 #[cfg(test)]
@@ -36,6 +38,8 @@ use crate::playlists::{self, PlaylistInfo, Target};
 use crate::transcribe;
 use crate::visuals;
 use effects::Effects;
+use layout::Layout;
+pub use layout::LayoutSet;
 use lyrics_view::LyricsState;
 use player::Player;
 use theme::Theme;
@@ -99,6 +103,11 @@ enum Mode {
     },
     /// The key list.
     Help,
+    /// Arranging the panels; `draft` is drawn instead of the saved layout.
+    LayoutEdit {
+        draft: Layout,
+        selected: usize,
+    },
     /// Choosing keys; `capturing` waits for the next key press.
     Settings {
         state: ListState,
@@ -168,6 +177,9 @@ pub struct App {
     /// Name of the color set in use (for `T`).
     theme_name: String,
     keymap: Keymap,
+    layouts: LayoutSet,
+    /// Width of the last frame, to freeze the classic layout for editing.
+    screen_width: u16,
     hotkeys: Option<Hotkeys>,
     /// Makes the library worker rescan `music/` at once.
     library_refresh: Option<Sender<()>>,
@@ -219,9 +231,16 @@ impl App {
             fullscreen: false,
             theme_name: config.theme.preset.clone(),
             keymap: Keymap::defaults(),
+            layouts: LayoutSet::presets_only(),
+            screen_width: 120,
             hotkeys: None,
             library_refresh: None,
         }
+    }
+
+    pub fn with_layouts(mut self, layouts: LayoutSet) -> Self {
+        self.layouts = layouts;
+        self
     }
 
     /// The parts that talk to the system; tests run without them.
@@ -462,6 +481,7 @@ impl App {
             Mode::GifPick { .. } => self.key_gif_pick(key),
             Mode::Help => self.mode = Mode::Normal,
             Mode::Settings { .. } => self.key_settings(key),
+            Mode::LayoutEdit { .. } => self.key_layout_edit(key),
             Mode::ConfirmModel { .. } => self.key_confirm_model(key),
         }
     }
@@ -500,6 +520,7 @@ impl App {
             KeyCode::Char('g') => self.start_gif_pick(),
             KeyCode::Char('?') => self.mode = Mode::Help,
             KeyCode::Char('S') => self.open_settings(),
+            KeyCode::Char('E') => self.open_layout_editor(),
             KeyCode::Char('T') => self.next_theme(),
             KeyCode::Char('c') => self.start_create(),
             KeyCode::Char('e') => self.start_rename(),

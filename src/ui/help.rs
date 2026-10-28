@@ -12,6 +12,7 @@ use crate::keys::Action;
 /// Keys and what they do; also the single source for tests.
 pub(super) const HELP: &[(&str, &str)] = &[
     ("S", "settings: choose keys, make them work everywhere"),
+    ("E", "layout editor: move, resize, hide panels"),
     ("a", "add to a playlist"),
     ("/", "search (Enter keeps the filter, Esc clears it)"),
     ("g", "choose the GIF (Tab: playlist or global)"),

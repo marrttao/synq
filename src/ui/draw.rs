@@ -32,33 +32,28 @@ impl App {
             self.draw_popup(f, area);
             return;
         }
+        self.screen_width = area.width;
+        let layout = self.active_layout();
+        let bar = if layout.player { 5.min(area.height) } else { 0 };
         let [main, bottom] =
-            Layout::vertical([Constraint::Min(3), Constraint::Length(5)]).areas(area);
+            Layout::vertical([Constraint::Min(0), Constraint::Length(bar)]).areas(area);
 
-        // Narrow windows collapse side panels.
-        let (show_left, show_right) = (area.width >= 70, area.width >= 110);
-        let mut constraints = Vec::new();
-        if show_left {
-            constraints.push(Constraint::Percentage(34));
-        }
-        constraints.push(Constraint::Min(20));
-        if show_right {
-            constraints.push(Constraint::Percentage(24));
-        }
-        let cols = Layout::horizontal(constraints).split(main);
-        let mut cols = cols.iter().copied();
-        if show_left && let Some(r) = cols.next() {
+        self.fx.lyrics_inner.set(Rect::ZERO);
+        let [library, lyrics, visual] = layout.effective(area.width);
+        if let Some(r) = library.rect(main) {
             self.draw_browser(f, r);
         }
-        if let Some(r) = cols.next() {
+        if let Some(r) = lyrics.rect(main) {
             self.draw_lyrics(f, r);
         }
-        if show_right && let Some(r) = cols.next() {
+        if let Some(r) = visual.rect(main) {
             self.draw_visual(f, r);
         }
-
-        self.draw_player_bar(f, bottom);
+        if layout.player {
+            self.draw_player_bar(f, bottom);
+        }
         self.fx.process(f.buffer_mut(), area);
+        self.draw_layout_editor(f, area, main);
         self.draw_popup(f, area);
     }
 
@@ -329,6 +324,7 @@ impl App {
         match &mut self.mode {
             Mode::Normal | Mode::Search => {}
             Mode::Help => self.draw_help(f, screen),
+            Mode::LayoutEdit { .. } => {}
             Mode::Settings { state, capturing } => {
                 let (mut st, cap) = (std::mem::take(state), *capturing);
                 self.draw_settings(f, screen, &mut st, cap);

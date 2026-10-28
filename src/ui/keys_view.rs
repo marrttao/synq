@@ -39,6 +39,7 @@ impl App {
             Action::Fullscreen => self.toggle_fullscreen(),
             Action::PictureMode => self.toggle_picture_mode(),
             Action::Refresh => self.refresh(),
+            Action::NextLayout => self.next_layout(),
         }
     }
 

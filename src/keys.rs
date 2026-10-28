@@ -26,10 +26,11 @@ pub enum Action {
     Fullscreen,
     PictureMode,
     Refresh,
+    NextLayout,
 }
 
 impl Action {
-    pub const ALL: [Action; 16] = [
+    pub const ALL: [Action; 17] = [
         Action::PlayPause,
         Action::Next,
         Action::Prev,
@@ -46,6 +47,7 @@ impl Action {
         Action::Fullscreen,
         Action::PictureMode,
         Action::Refresh,
+        Action::NextLayout,
     ];
 
     /// Stable name used in the database.
@@ -67,6 +69,7 @@ impl Action {
             Action::Fullscreen => "fullscreen",
             Action::PictureMode => "picture_mode",
             Action::Refresh => "refresh",
+            Action::NextLayout => "next_layout",
         }
     }
 
@@ -88,6 +91,7 @@ impl Action {
             Action::Fullscreen => "Full screen",
             Action::PictureMode => "Picture / ASCII",
             Action::Refresh => "Refresh everything",
+            Action::NextLayout => "Next layout",
         }
     }
 
@@ -110,6 +114,7 @@ impl Action {
             Action::Fullscreen => plain(KeyCode::Char('F')),
             Action::PictureMode => plain(KeyCode::Char('v')),
             Action::Refresh => plain(KeyCode::Char('R')),
+            Action::NextLayout => plain(KeyCode::Char('L')),
         }
     }
 }
@@ -448,7 +453,7 @@ fn reserved(chord: Chord) -> bool {
     match chord.code {
         KeyCode::Esc | KeyCode::Enter | KeyCode::Tab | KeyCode::Backspace => true,
         KeyCode::Char('c') if chord.mods == KeyModifiers::CONTROL => true,
-        KeyCode::Char(c) if plain => "qjk/acedgtTS?".contains(c),
+        KeyCode::Char(c) if plain => "qjk/acedgtTSE?".contains(c),
         KeyCode::Up
         | KeyCode::Down
         | KeyCode::PageUp

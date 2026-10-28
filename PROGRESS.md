@@ -1,6 +1,10 @@
 # PROGRESS
 
 
+## Stage 11: layouts and the layout editor
+- `ui/layout.rs`: percent-based places for Library/Lyrics/Visual, player bar on/off; presets Classic (responsive), Lyrics, Cinema; custom layouts saved as `layout:<name>` in settings. `L` cycles, `E` edits (move, resize, scale, hide, save / save as new / delete).
+- Known: the player bar is fixed at the bottom; panels may overlap if the user places them so; not tried in a real terminal.
+
 ## Stage 10: refresh, picture fill, ASCII, rebindable and global keys
 - The picture is cover-cropped to the exact panel size (it fills 100%); first image in `gifs/` is shown until a choice is made, "(none)" is stored as "-".
 - `v`: picture / ASCII (brightness ramp tinted with the pixel color); `visuals.mode` sets the default.

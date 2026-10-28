@@ -182,3 +182,105 @@ fn a_rebound_key_does_the_action_and_the_old_one_does_not() {
     app.run_action(Action::Fullscreen);
     assert!(!app.fullscreen);
 }
+
+fn setup_with_db() -> (tempfile::TempDir, Paths, App) {
+    let (tmp, paths, app, _r) = setup();
+    let (layouts, _) = LayoutSet::load(paths.db.clone());
+    (tmp, paths, app.with_layouts(layouts))
+}
+
+fn screen_text(app: &mut App, w: u16, h: u16) -> String {
+    let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(w, h)).unwrap();
+    t.draw(|f| app.draw(f)).unwrap();
+    t.backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect()
+}
+
+#[test]
+fn l_cycles_through_the_layouts_and_each_one_draws_at_every_size() {
+    let (_tmp, _paths, mut app) = setup_with_db();
+    let t = screen_text(&mut app, 120, 30);
+    assert!(t.contains("Library") && t.contains("Lyrics") && t.contains("Visual"));
+
+    key(&mut app, KeyCode::Char('L'));
+    assert!(app.status.contains("Lyrics"), "{}", app.status);
+    let t = screen_text(&mut app, 120, 30);
+    assert!(!t.contains("Library"), "the Lyrics layout has no list");
+    assert!(t.contains("Visual"));
+
+    key(&mut app, KeyCode::Char('L'));
+    assert!(app.status.contains("Cinema"), "{}", app.status);
+    for _ in 0..4 {
+        for (w, h) in [(120, 40), (80, 24), (50, 12), (20, 6), (10, 4), (1, 1)] {
+            screen_text(&mut app, w, h);
+        }
+        key(&mut app, KeyCode::Char('L'));
+    }
+}
+
+#[test]
+fn the_editor_moves_resizes_hides_and_saves_a_new_layout() {
+    let (_tmp, paths, mut app) = setup_with_db();
+    key(&mut app, KeyCode::Char('E'));
+    assert!(matches!(app.mode, Mode::LayoutEdit { .. }));
+    // Library is selected first: shrink it and hide the Visual panel.
+    press(&mut app, KeyCode::Left, KeyModifiers::SHIFT);
+    press(&mut app, KeyCode::Left, KeyModifiers::SHIFT);
+    key(&mut app, KeyCode::Tab);
+    key(&mut app, KeyCode::Tab);
+    key(&mut app, KeyCode::Char(' ')); // Visual off
+    key(&mut app, KeyCode::Tab);
+    key(&mut app, KeyCode::Char(' ')); // player bar off
+    let Mode::LayoutEdit { draft, .. } = &app.mode else {
+        panic!("still editing")
+    };
+    assert_eq!(draft.places[0].w, 30);
+    assert!(!draft.places[2].visible && !draft.player);
+    // The preview shows the draft at once, with the editor hints.
+    let t = screen_text(&mut app, 120, 30);
+    assert!(t.contains("Layout \"Custom 1\"") && !t.contains("Visual:"));
+    for (w, h) in [(80, 24), (30, 8), (1, 1)] {
+        screen_text(&mut app, w, h);
+    }
+
+    key(&mut app, KeyCode::Char('s'));
+    assert!(matches!(app.mode, Mode::Normal));
+    assert_eq!(app.layouts.current().name, "Custom 1");
+    assert!(!app.layouts.current().player);
+
+    // It survives a restart and the built-in ones are untouched.
+    let (again, _) = LayoutSet::load(paths.db.clone());
+    assert_eq!(again.current().name, "Custom 1");
+    assert_eq!(again.current().places[0].w, 30);
+
+    // Editing a saved layout and "save as new" keeps the first one.
+    key(&mut app, KeyCode::Char('E'));
+    key(&mut app, KeyCode::Char('+'));
+    key(&mut app, KeyCode::Char('n'));
+    assert_eq!(app.layouts.current().name, "Custom 2");
+    assert!(app.layouts.exists_custom("Custom 1"));
+
+    // Esc discards; D deletes.
+    key(&mut app, KeyCode::Char('E'));
+    key(&mut app, KeyCode::Char('l'));
+    key(&mut app, KeyCode::Esc);
+    assert!(app.status.contains("not saved"));
+    key(&mut app, KeyCode::Char('E'));
+    key(&mut app, KeyCode::Char('D'));
+    assert!(!app.layouts.exists_custom("Custom 2"));
+    assert_eq!(app.layouts.current().name, "Classic");
+}
+
+#[test]
+fn editing_a_built_in_layout_never_changes_it() {
+    let (_tmp, _paths, mut app) = setup_with_db();
+    let before = app.layouts.current().clone();
+    key(&mut app, KeyCode::Char('E'));
+    key(&mut app, KeyCode::Char('K'));
+    key(&mut app, KeyCode::Esc);
+    assert_eq!(app.layouts.current(), &before);
+}
