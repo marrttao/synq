@@ -1,6 +1,7 @@
 //! Terminal UI: application state, input handling and the main loop.
 //! Rendering lives in `draw.rs`.
 
+mod bigtext;
 mod blocks;
 mod draw;
 mod effects;
@@ -206,6 +207,8 @@ pub struct App {
     fullscreen: bool,
     palettes: PaletteSet,
     lyrics_backdrop: u8,
+    lyrics_mode: lyrics_view::LyricsMode,
+    word_font: bigtext::FontKind,
     keymap: Keymap,
     layouts: LayoutSet,
     /// Width of the last frame, to freeze the classic layout for editing.
@@ -271,6 +274,8 @@ impl App {
             fullscreen: false,
             palettes: PaletteSet::presets_only(&config.theme.preset),
             lyrics_backdrop: config.ui.lyrics_backdrop.min(100),
+            lyrics_mode: lyrics_view::LyricsMode::from_config(&config.lyrics.display),
+            word_font: bigtext::FontKind::from_config(&config.lyrics.word_font),
             keymap: Keymap::defaults(),
             layouts: LayoutSet::presets_only(),
             screen_width: 120,

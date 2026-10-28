@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.104"
 crossterm = "0.29.0"
+fontdue = "0.9.5"
 image = { version = "0.25", default-features = false, features = ["gif", "png", "jpeg"] }
 lofty = "0.25.5"
 notify = "8.2.1"

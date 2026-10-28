@@ -174,3 +174,37 @@ fn animations_start_on_a_new_line_and_can_be_turned_off() {
         render(&mut app, 10, 4);
     }
 }
+
+#[test]
+fn the_word_mode_draws_only_the_sung_word_in_big_letters() {
+    let (_tmp, mut app) = make_app(false);
+    with_lyrics(
+        &mut app,
+        vec![
+            line(0, "one two", vec![word(0, "one "), word(60_000, "two")]),
+            line(90_000, "next line", vec![]),
+        ],
+    );
+    key(&mut app, KeyCode::Char('w'));
+    assert_eq!(app.lyrics_mode, lyrics_view::LyricsMode::Word);
+    assert!(app.status.contains("one word"), "{}", app.status);
+    let buf = render(&mut app, 120, 40);
+    let t = text(&buf);
+    // The text itself is not printed as words: only big quadrant characters.
+    assert!(!t.contains("one two") && !t.contains("next line"));
+    let blocks = buf
+        .content()
+        .iter()
+        .filter(|c| ('\u{2580}'..='\u{259F}').contains(&c.symbol().chars().next().unwrap_or(' ')))
+        .count();
+    assert!(blocks > 40, "big letters are drawn: {blocks}");
+    // The other font, and every size.
+    key(&mut app, KeyCode::Char('W'));
+    assert!(app.status.contains("Oswald"), "{}", app.status);
+    for (w, h) in [(120, 40), (60, 14), (30, 8), (10, 4), (1, 1)] {
+        render(&mut app, w, h);
+    }
+    // Back to all lines.
+    key(&mut app, KeyCode::Char('w'));
+    assert!(text(&render(&mut app, 120, 40)).contains("next line"));
+}

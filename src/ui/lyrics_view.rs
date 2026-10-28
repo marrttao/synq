@@ -11,7 +11,7 @@ use ratatui::widgets::{Paragraph, Wrap};
 use crate::lyrics::lrc::{self, current_line};
 use crate::lyrics::{self, Lyrics, Source};
 
-use super::App;
+use super::{App, bigtext};
 
 /// Offset step for `[` and `]`.
 const OFFSET_STEP_MS: i64 = 100;
@@ -37,6 +37,32 @@ pub(super) enum LyricsState {
 /// A dark backdrop for text lying over a picture: whatever is already in
 /// `area` is mixed with the background color, `percent` of the way (100
 /// hides it completely, 0 leaves it alone).
+/// How the lyrics are shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum LyricsMode {
+    /// The lines around the current one, the current one highlighted.
+    Full,
+    /// Only the word that is being sung, in big letters.
+    Word,
+}
+
+impl LyricsMode {
+    pub(super) fn from_config(name: &str) -> Self {
+        if name.trim().eq_ignore_ascii_case("word") {
+            Self::Word
+        } else {
+            Self::Full
+        }
+    }
+
+    pub(super) fn cycle(self) -> Self {
+        match self {
+            Self::Full => Self::Word,
+            Self::Word => Self::Full,
+        }
+    }
+}
+
 fn darken_behind(buf: &mut ratatui::buffer::Buffer, area: Rect, bg: Color, percent: u8) {
     let Color::Rgb(br, bgc, bb) = bg else { return };
     let mix = |c: Color| match c {
@@ -312,6 +338,31 @@ impl App {
                         .wrap(Wrap { trim: false }),
                     inner,
                 );
+            }
+            LyricsState::Ready {
+                lyrics: Lyrics::Synced(lines),
+                offset_ms,
+                ..
+            } if self.lyrics_mode == LyricsMode::Word => {
+                let word = lrc::current_word(lines, self.position_ms(), *offset_ms);
+                match word {
+                    Some(w) => {
+                        let color = self.theme.rotating(w.line * 3 + w.index);
+                        if let Some(cov) =
+                            bigtext::render(self.word_font, &w.text, inner.width, inner.height)
+                        {
+                            bigtext::paint(
+                                f.buffer_mut(),
+                                inner,
+                                &cov,
+                                color,
+                                self.theme.background,
+                            );
+                        }
+                    }
+                    // Between lines, or in an instrumental part.
+                    None => f.render_widget(message("\u{266A}"), middle),
+                }
             }
             LyricsState::Ready {
                 lyrics: Lyrics::Synced(lines),

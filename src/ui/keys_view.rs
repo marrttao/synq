@@ -12,6 +12,7 @@ use crate::hotkeys::{self, HotkeyEvent};
 use crate::keys::{Action, Chord};
 use crate::playlists;
 
+use super::lyrics_view::LyricsMode;
 use super::{App, Mode};
 
 impl App {
@@ -35,6 +36,11 @@ impl App {
             Action::Repeat => self.player.cycle_repeat(),
             Action::Favorite => self.toggle_favorite(),
             Action::Lyrics => self.show_lyrics = !self.show_lyrics,
+            Action::LyricsMode => self.toggle_lyrics_mode(),
+            Action::WordFont => {
+                self.word_font = self.word_font.cycle();
+                self.status = format!("One-word font: {}", self.word_font.label());
+            }
             Action::LyricsEarlier => self.shift_lyrics(false),
             Action::LyricsLater => self.shift_lyrics(true),
             Action::Fullscreen => self.toggle_fullscreen(),
@@ -49,6 +55,17 @@ impl App {
             Action::NextPalette => self.step_theme(true),
             Action::PrevPalette => self.step_theme(false),
         }
+    }
+
+    fn toggle_lyrics_mode(&mut self) {
+        self.lyrics_mode = self.lyrics_mode.cycle();
+        self.status = match self.lyrics_mode {
+            LyricsMode::Full => "Lyrics: all lines".into(),
+            LyricsMode::Word => format!(
+                "Lyrics: one word at a time ({} font)",
+                self.word_font.label()
+            ),
+        };
     }
 
     fn toggle_picture_mode(&mut self) {

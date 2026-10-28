@@ -23,6 +23,8 @@ pub enum Action {
     Repeat,
     Favorite,
     Lyrics,
+    LyricsMode,
+    WordFont,
     LyricsEarlier,
     LyricsLater,
     Fullscreen,
@@ -36,7 +38,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 23] = [
+    pub const ALL: [Action; 25] = [
         Action::PlayPause,
         Action::Next,
         Action::Prev,
@@ -50,6 +52,8 @@ impl Action {
         Action::Repeat,
         Action::Favorite,
         Action::Lyrics,
+        Action::LyricsMode,
+        Action::WordFont,
         Action::LyricsEarlier,
         Action::LyricsLater,
         Action::Fullscreen,
@@ -78,6 +82,8 @@ impl Action {
             Action::Repeat => "repeat",
             Action::Favorite => "favorite",
             Action::Lyrics => "lyrics",
+            Action::LyricsMode => "lyrics_mode",
+            Action::WordFont => "word_font",
             Action::LyricsEarlier => "lyrics_earlier",
             Action::LyricsLater => "lyrics_later",
             Action::Fullscreen => "fullscreen",
@@ -106,6 +112,8 @@ impl Action {
             Action::Repeat => "Repeat mode",
             Action::Favorite => "Favorite on / off",
             Action::Lyrics => "Show / hide lyrics",
+            Action::LyricsMode => "Lyrics: all lines / one word",
+            Action::WordFont => "One-word font: Lobster / Oswald",
             Action::LyricsEarlier => "Lyrics earlier 0.1 s",
             Action::LyricsLater => "Lyrics later 0.1 s",
             Action::Fullscreen => "Full screen",
@@ -135,6 +143,8 @@ impl Action {
             Action::Repeat => plain(KeyCode::Char('r')),
             Action::Favorite => plain(KeyCode::Char('*')),
             Action::Lyrics => plain(KeyCode::Char('l')),
+            Action::LyricsMode => plain(KeyCode::Char('w')),
+            Action::WordFont => plain(KeyCode::Char('W')),
             Action::LyricsEarlier => plain(KeyCode::Char('[')),
             Action::LyricsLater => plain(KeyCode::Char(']')),
             Action::Fullscreen => plain(KeyCode::Char('f')),

@@ -249,9 +249,127 @@ pub fn current_line(lines: &[Line], pos_ms: u64, offset_ms: i64) -> Option<usize
         .checked_sub(1)
 }
 
+/// The word being sung at one moment, for the one-word display.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WordAt {
+    pub line: usize,
+    pub index: usize,
+    /// Without the punctuation around it.
+    pub text: String,
+}
+
+/// Longest time a word is assumed to take when only the line is timed.
+const GUESSED_WORD_MS: u64 = 700;
+
+/// The word at `pos_ms`. Lines with word timings use them; for the others
+/// the line's time is shared between its words by their length.
+pub fn current_word(lines: &[Line], pos_ms: u64, offset_ms: i64) -> Option<WordAt> {
+    let line = current_line(lines, pos_ms, offset_ms)?;
+    let pos = pos_ms as i64 - offset_ms;
+    let l = &lines[line];
+    let clean = |s: &str| {
+        s.trim()
+            .trim_matches(|c: char| {
+                matches!(
+                    c,
+                    ',' | '.' | ';' | ':' | '!' | '?' | '"' | '(' | ')' | '\u{2026}' | '-'
+                )
+            })
+            .to_owned()
+    };
+    let (index, raw) = if l.words.is_empty() {
+        let tokens: Vec<&str> = l.text.split_whitespace().collect();
+        if tokens.is_empty() {
+            return None;
+        }
+        let start = l.time_ms as i64;
+        let natural = l
+            .end_ms
+            .or_else(|| lines.get(line + 1).map(|n| n.time_ms))
+            .unwrap_or(l.time_ms + 4000);
+        let end = natural
+            .min(l.time_ms + GUESSED_WORD_MS * tokens.len() as u64)
+            .max(l.time_ms + 1) as i64;
+        let total: usize = tokens.iter().map(|t| t.chars().count() + 1).sum();
+        let progress = ((pos - start) as f64 / (end - start) as f64).clamp(0.0, 1.0);
+        let target = progress * total as f64;
+        let mut seen = 0usize;
+        let mut chosen = tokens.len() - 1;
+        for (i, t) in tokens.iter().enumerate() {
+            seen += t.chars().count() + 1;
+            if (seen as f64) > target {
+                chosen = i;
+                break;
+            }
+        }
+        (chosen, tokens[chosen].to_owned())
+    } else {
+        let i = l
+            .words
+            .partition_point(|w| w.time_ms as i64 <= pos)
+            .checked_sub(1)?;
+        (i, l.words[i].text.clone())
+    };
+    let text = clean(&raw);
+    (!text.is_empty()).then_some(WordAt { line, index, text })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_current_word_comes_from_word_times_or_is_guessed() {
+        let word = |t, s: &str| Word {
+            time_ms: t,
+            text: s.into(),
+        };
+        let lines = vec![
+            Line {
+                time_ms: 1000,
+                text: "one two three".into(),
+                words: vec![word(1000, "one "), word(2000, "two, "), word(3500, "three")],
+                end_ms: Some(5000),
+            },
+            Line {
+                time_ms: 6000,
+                text: "ab cdefgh".into(),
+                words: vec![],
+                end_ms: None,
+            },
+            Line {
+                time_ms: 9000,
+                text: String::new(),
+                words: vec![],
+                end_ms: None,
+            },
+        ];
+        let at = |pos| current_word(&lines, pos, 0).map(|w| (w.line, w.index, w.text));
+        assert_eq!(at(500), None, "before the first line");
+        assert_eq!(at(1000), Some((0, 0, "one".into())));
+        assert_eq!(
+            at(2999),
+            Some((0, 1, "two".into())),
+            "punctuation is dropped"
+        );
+        assert_eq!(at(4000), Some((0, 2, "three".into())));
+        assert_eq!(
+            at(5500),
+            Some((0, 2, "three".into())),
+            "the last word stays"
+        );
+        // Guessed: "ab" is 3 of 10 weight units, "cdefgh" the rest, over 1400 ms.
+        assert_eq!(at(6000), Some((1, 0, "ab".into())));
+        assert_eq!(at(6300), Some((1, 0, "ab".into())));
+        assert_eq!(at(6700), Some((1, 1, "cdefgh".into())));
+        assert_eq!(at(8500), Some((1, 1, "cdefgh".into())));
+        assert_eq!(at(9500), None, "an instrumental gap shows nothing");
+        // The lyrics offset moves it like everything else.
+        assert_eq!(
+            current_word(&lines, 2500, 1000).map(|w| w.text),
+            Some("one".into())
+        );
+    }
 
     fn synced(input: &str) -> Vec<Line> {
         match parse(input) {

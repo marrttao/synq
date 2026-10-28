@@ -63,6 +63,11 @@ pub struct AudioConfig {
 pub struct LyricsConfig {
     /// Look lyrics up on LRCLIB when nothing local is found.
     pub online: bool,
+    /// "full": all the lines; "word": only the word being sung, in big letters
+    /// (key w switches).
+    pub display: String,
+    /// Font of the one-word display: "lobster" (script) or "oswald" (clean).
+    pub word_font: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -122,7 +127,11 @@ impl Default for AudioConfig {
 
 impl Default for LyricsConfig {
     fn default() -> Self {
-        Self { online: true }
+        Self {
+            online: true,
+            display: "full".into(),
+            word_font: "lobster".into(),
+        }
     }
 }
 
@@ -175,6 +184,10 @@ seek_step_secs = 5
 [lyrics]
 # Look lyrics up on LRCLIB when nothing local is found.
 online = true
+# "full" (all lines) or "word" (only the word being sung, big); key w switches.
+display = "full"
+# Font of the one-word display: "lobster" (script) or "oswald" (clean).
+word_font = "lobster"
 
 [whisper]
 # Transcribe lyrics locally when no other source has them.
