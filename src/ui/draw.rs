@@ -1,5 +1,7 @@
 //! Rendering. All state lives in `App` (see `mod.rs`).
 
+use std::time::Duration;
+
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -43,7 +45,7 @@ impl App {
             self.draw_browser(f, r);
         }
         if let Some(r) = cols.next() {
-            f.render_widget(self.block("Lyrics"), r);
+            self.draw_lyrics(f, r);
         }
         if show_right && let Some(r) = cols.next() {
             f.render_widget(self.block("Visual"), r);
@@ -226,7 +228,10 @@ impl App {
         );
 
         let total_ms = now.map_or(0, |t| t.duration_ms);
-        let pos_ms = self.player.position.as_millis() as u64;
+        let pos_ms = self
+            .player
+            .current_position(Duration::from_millis(total_ms))
+            .as_millis() as u64;
         let ratio = if total_ms == 0 {
             0.0
         } else {

@@ -1,7 +1,7 @@
 //! UI-side playback state: mirrors what the audio thread reports and turns
 //! key presses into audio commands.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::audio::queue::{QueueItem, Repeat};
 use crate::audio::{Audio, Command, Event};
@@ -14,7 +14,9 @@ pub struct Player {
     audio: Audio,
     /// Library id of the track being played.
     pub now_id: Option<i64>,
-    pub position: Duration,
+    /// Last position reported by the audio thread (see `current_position`).
+    position: Duration,
+    position_at: Instant,
     pub paused: bool,
     pub volume: f32,
     pub shuffle: bool,
@@ -30,6 +32,7 @@ impl Player {
             audio: Audio::spawn(volume, false, Repeat::Off),
             now_id: None,
             position: Duration::ZERO,
+            position_at: Instant::now(),
             paused: false,
             volume,
             shuffle: false,
@@ -46,19 +49,39 @@ impl Player {
             match ev {
                 Event::Started { id } => {
                     self.now_id = Some(id);
-                    self.position = Duration::ZERO;
+                    self.set_position(Duration::ZERO);
                 }
-                Event::Position(p) => self.position = p,
+                Event::Position(p) => self.set_position(p),
                 Event::Paused(p) => self.paused = p,
                 Event::Stopped => {
                     self.now_id = None;
-                    self.position = Duration::ZERO;
+                    self.set_position(Duration::ZERO);
                     self.paused = false;
                 }
                 Event::Error(msg) => error = Some(msg),
             }
         }
         error
+    }
+
+    fn set_position(&mut self, pos: Duration) {
+        self.position = pos;
+        self.position_at = Instant::now();
+    }
+
+    /// Playback position now. The audio thread reports every 100 ms; between
+    /// reports the clock keeps running so that the progress bar and lyrics
+    /// move smoothly. `limit` (the track length, or zero if unknown) caps it.
+    pub fn current_position(&self, limit: Duration) -> Duration {
+        if self.now_id.is_none() {
+            return Duration::ZERO;
+        }
+        let pos = if self.paused {
+            self.position
+        } else {
+            self.position + self.position_at.elapsed()
+        };
+        if limit.is_zero() { pos } else { pos.min(limit) }
     }
 
     /// Play `tracks[selected]` with the whole list as the queue.
@@ -108,9 +131,14 @@ impl Player {
         if self.now_id.is_none() {
             return;
         }
-        let target = seek_target(self.position, self.seek_step, forward, duration);
+        let target = seek_target(
+            self.current_position(duration),
+            self.seek_step,
+            forward,
+            duration,
+        );
         // Show the jump at once instead of waiting for the next report.
-        self.position = target;
+        self.set_position(target);
         self.audio.send(Command::Seek(target));
     }
 

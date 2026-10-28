@@ -6,6 +6,8 @@
 mod scan;
 mod tags;
 
+pub use tags::UNKNOWN_ARTIST;
+
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;

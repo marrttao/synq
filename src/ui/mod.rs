@@ -2,6 +2,7 @@
 //! Rendering lives in `draw.rs`.
 
 mod draw;
+mod lyrics_view;
 mod player;
 mod theme;
 mod tracklist;
@@ -19,7 +20,9 @@ use ratatui::widgets::ListState;
 use crate::config::Config;
 use crate::db::Track;
 use crate::library::LibraryEvent;
+use crate::lyrics;
 use crate::playlists::{self, PlaylistInfo, Target};
+use lyrics_view::LyricsState;
 use player::Player;
 use theme::Theme;
 
@@ -91,6 +94,12 @@ pub struct App {
     mode: Mode,
     lists: [ListState; 4],
     player: Player,
+    music_dir: PathBuf,
+    lyrics: lyrics::Handle,
+    lyrics_state: LyricsState,
+    /// Track the current lyrics (or lookup) belong to.
+    lyrics_for: Option<i64>,
+    show_lyrics: bool,
 }
 
 impl App {
@@ -99,6 +108,7 @@ impl App {
         status: Option<String>,
         library_rx: Receiver<LibraryEvent>,
         playlists: playlists::Handle,
+        lyrics: lyrics::Handle,
         music_dir: PathBuf,
     ) -> Self {
         Self {
@@ -118,7 +128,12 @@ impl App {
             filter: String::new(),
             mode: Mode::Normal,
             lists: Default::default(),
-            player: Player::new(&config.audio, music_dir),
+            player: Player::new(&config.audio, music_dir.clone()),
+            music_dir,
+            lyrics,
+            lyrics_state: LyricsState::Idle,
+            lyrics_for: None,
+            show_lyrics: true,
         }
     }
 
@@ -127,9 +142,11 @@ impl App {
         while !self.should_quit {
             self.drain_library_events();
             self.drain_playlist_events();
+            self.drain_lyrics_events();
             if let Some(err) = self.player.poll() {
                 self.status = err;
             }
+            self.sync_lyrics_request();
             terminal.draw(|f| self.draw(f))?;
             next_frame += FRAME;
             // Wait for input until the next frame is due; keeps ~30 fps
@@ -340,6 +357,12 @@ impl App {
     fn key_normal(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
+            KeyCode::Down if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.scroll_lyrics(true)
+            }
+            KeyCode::Up if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.scroll_lyrics(false)
+            }
             KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
             KeyCode::PageDown => self.move_selection(PAGE as isize),
@@ -366,6 +389,10 @@ impl App {
             KeyCode::Char('s') => self.player.toggle_shuffle(),
             KeyCode::Char('r') => self.player.cycle_repeat(),
             KeyCode::Char('f') => self.toggle_favorite(),
+            KeyCode::Char('l') => self.show_lyrics = !self.show_lyrics,
+            KeyCode::Char('t') => self.retry_lyrics(),
+            KeyCode::Char('[') => self.shift_lyrics(false),
+            KeyCode::Char(']') => self.shift_lyrics(true),
             KeyCode::Char('a') => self.start_pick(),
             KeyCode::Char('c') => self.start_create(),
             KeyCode::Char('e') => self.start_rename(),
@@ -669,6 +696,7 @@ mod tests {
             None,
             lib_rx,
             playlists::spawn(&paths),
+            lyrics::spawn(paths.db.clone(), paths.lyrics.clone(), false),
             paths.music.clone(),
         );
         lib_tx
@@ -738,5 +766,141 @@ mod tests {
         key(&mut app, KeyCode::Char('y'));
         wait(&mut app, "playlist deleted", |a| a.playlist_data.is_empty());
         assert!(!paths.playlists.join("Quiet mix").exists());
+    }
+}
+
+#[cfg(test)]
+mod lyrics_tests {
+    use super::*;
+    use crate::db::{Db, TrackRecord};
+    use crate::lyrics::Lyrics;
+    use crate::paths::Paths;
+    use crate::testutil::wav_bytes;
+    use std::sync::mpsc;
+
+    fn key(app: &mut App, code: KeyCode) {
+        app.handle_event(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)));
+    }
+
+    fn wait(app: &mut App, what: &str, cond: impl Fn(&App) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            app.drain_library_events();
+            app.drain_lyrics_events();
+            app.sync_lyrics_request();
+            if cond(app) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("timed out waiting for: {what}");
+    }
+
+    fn render(app: &mut App, w: u16, h: u16) {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(w, h)).unwrap();
+        terminal.draw(|f| app.draw(f)).unwrap();
+    }
+
+    #[test]
+    fn lyrics_follow_the_playing_track_and_can_be_shifted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::new(tmp.path().to_path_buf());
+        paths.ensure_dirs().unwrap();
+        let db = Db::open(&paths.db).unwrap();
+        std::fs::write(paths.music.join("song.wav"), wav_bytes(100)).unwrap();
+        std::fs::write(
+            paths.music.join("song.lrc"),
+            "[00:01.00]first\n[00:02.00]second\n",
+        )
+        .unwrap();
+        std::fs::write(paths.music.join("quiet.wav"), wav_bytes(100)).unwrap();
+        for file in ["song.wav", "quiet.wav"] {
+            db.upsert_track(&TrackRecord {
+                path: file.into(),
+                size: 1,
+                mtime_ms: 1,
+                title: file.into(),
+                artist: "Band".into(),
+                album: String::new(),
+                duration_ms: 100,
+            })
+            .unwrap();
+        }
+
+        let (lib_tx, lib_rx) = mpsc::channel();
+        let mut app = App::new(
+            &Config::default(),
+            None,
+            lib_rx,
+            playlists::spawn(&paths),
+            lyrics::spawn(paths.db.clone(), paths.lyrics.clone(), false),
+            paths.music.clone(),
+        );
+        lib_tx
+            .send(LibraryEvent::Tracks(db.tracks().unwrap()))
+            .unwrap();
+        wait(&mut app, "tracks", |a| a.tracks.len() == 2);
+        render(&mut app, 120, 30); // Idle
+
+        // "Play" the track that has a .lrc file (no audio device needed).
+        let song_id = app.tracks.iter().find(|t| t.path == "song.wav").unwrap().id;
+        app.player.now_id = Some(song_id);
+        render(&mut app, 120, 30); // Searching
+        wait(&mut app, "lyrics loaded", |a| {
+            matches!(a.lyrics_state, LyricsState::Ready { .. })
+        });
+        render(&mut app, 120, 30);
+        render(&mut app, 30, 6);
+
+        // Shifting changes the offset and is remembered by the worker.
+        key(&mut app, KeyCode::Char(']'));
+        key(&mut app, KeyCode::Char(']'));
+        key(&mut app, KeyCode::Char('['));
+        match &app.lyrics_state {
+            LyricsState::Ready {
+                offset_ms, lyrics, ..
+            } => {
+                assert_eq!(*offset_ms, 100);
+                assert!(matches!(lyrics, Lyrics::Synced(l) if l.len() == 2));
+            }
+            _ => panic!("lyrics not ready"),
+        }
+
+        // A track without any lyrics: not found, retry does not crash.
+        let quiet_id = app
+            .tracks
+            .iter()
+            .find(|t| t.path == "quiet.wav")
+            .unwrap()
+            .id;
+        app.player.now_id = Some(quiet_id);
+        wait(&mut app, "not found", |a| {
+            matches!(a.lyrics_state, LyricsState::NotFound { .. })
+        });
+        render(&mut app, 120, 30);
+        key(&mut app, KeyCode::Char('t'));
+        wait(&mut app, "not found again", |a| {
+            matches!(a.lyrics_state, LyricsState::NotFound { .. })
+        });
+        key(&mut app, KeyCode::Char('['));
+        assert!(app.status.contains("synchronized"), "{}", app.status);
+
+        // The offset of the first track survives switching back to it.
+        app.player.now_id = Some(song_id);
+        wait(&mut app, "lyrics reloaded", |a| {
+            matches!(a.lyrics_state, LyricsState::Ready { .. })
+        });
+        match &app.lyrics_state {
+            LyricsState::Ready { offset_ms, .. } => assert_eq!(*offset_ms, 100),
+            _ => panic!("lyrics not ready"),
+        }
+
+        // Hiding lyrics still renders; stopping resets the panel.
+        key(&mut app, KeyCode::Char('l'));
+        render(&mut app, 120, 30);
+        app.player.now_id = None;
+        app.sync_lyrics_request();
+        assert!(matches!(app.lyrics_state, LyricsState::Idle));
     }
 }

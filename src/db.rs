@@ -238,6 +238,26 @@ impl Db {
             .optional()?)
     }
 
+    // ---- settings -------------------------------------------------------
+
+    pub fn setting(&self, key: &str) -> DbResult<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
+                r.get(0)
+            })
+            .optional()?)
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> DbResult<()> {
+        self.conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
     // ---- playlists ------------------------------------------------------
 
     pub fn create_playlist(&self, name: &str) -> DbResult<i64> {

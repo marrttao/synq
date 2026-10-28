@@ -2,6 +2,7 @@ mod audio;
 mod config;
 mod db;
 mod library;
+mod lyrics;
 mod paths;
 mod playlists;
 #[cfg(test)]
@@ -41,8 +42,16 @@ fn main() -> Result<()> {
     let mut terminal = ratatui::try_init().context("cannot initialize the terminal")?;
     let library_rx = library::spawn(paths.music.clone(), paths.db.clone());
     let playlists = playlists::spawn(&paths);
-    let result = ui::App::new(&config, status, library_rx, playlists, paths.music.clone())
-        .run(&mut terminal);
+    let lyrics = lyrics::spawn(paths.db.clone(), paths.lyrics.clone(), config.lyrics.online);
+    let result = ui::App::new(
+        &config,
+        status,
+        library_rx,
+        playlists,
+        lyrics,
+        paths.music.clone(),
+    )
+    .run(&mut terminal);
     ratatui::restore();
 
     if let Err(e) = &result {
