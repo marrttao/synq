@@ -133,7 +133,7 @@ fn theme_key_cycles_through_the_presets() {
     assert_eq!(seen.len(), 5, "five different backgrounds");
     key(&mut app, KeyCode::Char('T'));
     assert_eq!(app.theme.background, first, "the cycle closes");
-    assert!(app.status.starts_with("Theme:"));
+    assert!(app.status.starts_with("Colors:"));
     render(&mut app, 120, 30);
 }
 

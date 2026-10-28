@@ -49,7 +49,11 @@ fn main() -> Result<()> {
         library::spawn_refreshable(paths.music.clone(), paths.db.clone());
     let (keymap, keys_problem) = keys::Keymap::load(paths.db.clone());
     let (layouts, layouts_problem) = ui::LayoutSet::load(paths.db.clone());
-    let status = status.or(keys_problem).or(layouts_problem);
+    let (palettes, palettes_problem) = ui::PaletteSet::load(paths.db.clone(), &config.theme.preset);
+    let status = status
+        .or(keys_problem)
+        .or(layouts_problem)
+        .or(palettes_problem);
     let hotkeys = hotkeys::Hotkeys::spawn();
     let playlists = playlists::spawn(&paths);
     let lyrics = lyrics::spawn(paths.db.clone(), paths.lyrics.clone(), config.lyrics.online);
@@ -68,6 +72,7 @@ fn main() -> Result<()> {
         paths.music.clone(),
     )
     .with_layouts(layouts)
+    .with_palettes(palettes)
     .with_system(keymap, hotkeys, library_refresh)
     .run(&mut terminal);
     ratatui::restore();

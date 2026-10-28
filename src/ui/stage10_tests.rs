@@ -284,3 +284,108 @@ fn editing_a_built_in_layout_never_changes_it() {
     key(&mut app, KeyCode::Esc);
     assert_eq!(app.layouts.current(), &before);
 }
+
+fn setup_with_palettes() -> (tempfile::TempDir, Paths, App) {
+    let (tmp, paths, app, _r) = setup();
+    let (palettes, _) = PaletteSet::load(paths.db.clone(), "default");
+    (tmp, paths, app.with_palettes(palettes))
+}
+
+fn type_text(app: &mut App, text: &str) {
+    for c in text.chars() {
+        key(app, KeyCode::Char(c));
+    }
+}
+
+#[test]
+fn t_cycles_the_palettes_and_remembers_the_choice() {
+    let (_tmp, paths, mut app) = setup_with_palettes();
+    let first = app.theme.background;
+    key(&mut app, KeyCode::Char('T'));
+    assert!(app.status.contains("nord"), "{}", app.status);
+    assert_ne!(app.theme.background, first);
+    let (again, _) = PaletteSet::load(paths.db.clone(), "default");
+    assert!(again.restored);
+    assert_eq!(again.current().name, "nord");
+}
+
+#[test]
+fn the_color_editor_sets_any_number_of_colors_and_shows_them_live() {
+    let (_tmp, paths, mut app) = setup_with_palettes();
+    key(&mut app, KeyCode::Char('C'));
+    assert!(matches!(app.mode, Mode::PaletteEdit { .. }));
+    // Background: type a new value.
+    key(&mut app, KeyCode::Enter);
+    for _ in 0..6 {
+        key(&mut app, KeyCode::Backspace);
+    }
+    type_text(&mut app, "zz"); // not a hex digit: ignored
+    type_text(&mut app, "102030");
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(
+        app.theme.background,
+        ratatui::style::Color::Rgb(0x10, 0x20, 0x30)
+    );
+
+    // A wrong value is refused and says so.
+    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::Backspace);
+    key(&mut app, KeyCode::Enter);
+    assert!(app.status.contains("hex"), "{}", app.status);
+    key(&mut app, KeyCode::Esc); // leaves typing, not the editor
+    assert!(matches!(app.mode, Mode::PaletteEdit { .. }));
+
+    // Grow to 8 colors; the extras rotate with the accent.
+    for _ in 0..3 {
+        key(&mut app, KeyCode::Char('+'));
+    }
+    let Mode::PaletteEdit {
+        draft, selected, ..
+    } = &app.mode
+    else {
+        panic!("editing")
+    };
+    assert_eq!((draft.colors.len(), *selected), (8, 7));
+    for (w, h) in [(120, 40), (60, 20), (30, 8), (1, 1)] {
+        screen_text(&mut app, w, h);
+    }
+    let t = screen_text(&mut app, 120, 40);
+    assert!(t.contains("Extra 3") && t.contains("#102030"));
+
+    // Shrinking stops at 2; the limit is on the other side too.
+    for _ in 0..20 {
+        key(&mut app, KeyCode::Char('-'));
+    }
+    let Mode::PaletteEdit { draft, .. } = &app.mode else {
+        panic!("editing")
+    };
+    assert_eq!(draft.colors.len(), 2);
+    for _ in 0..20 {
+        key(&mut app, KeyCode::Char('+'));
+    }
+    let Mode::PaletteEdit { draft, .. } = &app.mode else {
+        panic!("editing")
+    };
+    assert_eq!(draft.colors.len(), 12);
+
+    key(&mut app, KeyCode::Char('s'));
+    assert!(matches!(app.mode, Mode::Normal));
+    assert_eq!(app.palettes.current().name, "Mine 1");
+    let (again, _) = PaletteSet::load(paths.db.clone(), "default");
+    assert_eq!(again.current().colors.len(), 12);
+    assert_eq!(again.current().colors[0], [0x10, 0x20, 0x30]);
+}
+
+#[test]
+fn leaving_the_color_editor_with_esc_restores_the_colors() {
+    let (_tmp, _paths, mut app) = setup_with_palettes();
+    let before = app.theme.background;
+    key(&mut app, KeyCode::Char('C'));
+    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::Backspace);
+    type_text(&mut app, "f");
+    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::Esc);
+    assert_eq!(app.theme.background, before);
+    assert!(app.palettes.current().colors.len() == 5 && !app.palettes.current().custom);
+}

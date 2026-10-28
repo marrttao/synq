@@ -1,6 +1,9 @@
 # PROGRESS
 
 
+## Stage 12: palettes of N colors
+- `ui/palette.rs`: built-in sets and own palettes of 2..12 colors (`palette:<name>` in settings, current choice remembered and wins over config.toml). `T` cycles, `C` edits with live preview. Colors 6+ rotate with the accent on the current lyric line and panel titles (`Theme::rotating`).
+
 ## Stage 11: layouts and the layout editor
 - `ui/layout.rs`: percent-based places for Library/Lyrics/Visual, player bar on/off; presets Classic (responsive), Lyrics, Cinema; custom layouts saved as `layout:<name>` in settings. `L` cycles, `E` edits (move, resize, scale, hide, save / save as new / delete).
 - Known: the player bar is fixed at the bottom; panels may overlap if the user places them so; not tried in a real terminal.

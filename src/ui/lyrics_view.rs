@@ -204,7 +204,7 @@ impl App {
             },
             _ => "Lyrics".to_owned(),
         };
-        let block = self.block(&title);
+        let block = self.block_n(&title, 2);
         let inner = block.inner(area);
         f.render_widget(block, area);
         self.fx.lyrics_inner.set(inner);
@@ -294,7 +294,7 @@ impl App {
                         Some((i, true)) if !lines[i].words.is_empty() => {
                             let pos = pos_ms as i64 - *offset_ms;
                             let sung = Style::new()
-                                .fg(self.theme.accent)
+                                .fg(self.theme.rotating(i))
                                 .add_modifier(Modifier::BOLD);
                             let waiting = Style::new().fg(self.theme.foreground);
                             Line::from(karaoke(&lines[i].words, pos, width, sung, waiting))
@@ -311,7 +311,7 @@ impl App {
                             };
                             let style = if is_current {
                                 Style::new()
-                                    .fg(self.theme.accent)
+                                    .fg(self.theme.rotating(i))
                                     .add_modifier(Modifier::BOLD)
                             } else {
                                 dim

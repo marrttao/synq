@@ -453,7 +453,7 @@ fn reserved(chord: Chord) -> bool {
     match chord.code {
         KeyCode::Esc | KeyCode::Enter | KeyCode::Tab | KeyCode::Backspace => true,
         KeyCode::Char('c') if chord.mods == KeyModifiers::CONTROL => true,
-        KeyCode::Char(c) if plain => "qjk/acedgtTSE?".contains(c),
+        KeyCode::Char(c) if plain => "qjk/acedgtTSEC?".contains(c),
         KeyCode::Up
         | KeyCode::Down
         | KeyCode::PageUp

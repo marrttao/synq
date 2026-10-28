@@ -8,6 +8,8 @@ mod keys_view;
 mod layout;
 mod layout_view;
 mod lyrics_view;
+mod palette;
+mod palette_view;
 mod player;
 #[cfg(test)]
 mod stage10_tests;
@@ -41,6 +43,7 @@ use effects::Effects;
 use layout::Layout;
 pub use layout::LayoutSet;
 use lyrics_view::LyricsState;
+pub use palette::PaletteSet;
 use player::Player;
 use theme::Theme;
 use visual_view::{VisualMode, VisualState};
@@ -103,6 +106,12 @@ enum Mode {
     },
     /// The key list.
     Help,
+    /// Editing the colors; `typing` holds a hex value being entered.
+    PaletteEdit {
+        draft: palette::Palette,
+        selected: usize,
+        typing: Option<String>,
+    },
     /// Arranging the panels; `draft` is drawn instead of the saved layout.
     LayoutEdit {
         draft: Layout,
@@ -174,8 +183,7 @@ pub struct App {
     visual: VisualState,
     fx: Effects,
     fullscreen: bool,
-    /// Name of the color set in use (for `T`).
-    theme_name: String,
+    palettes: PaletteSet,
     keymap: Keymap,
     layouts: LayoutSet,
     /// Width of the last frame, to freeze the classic layout for editing.
@@ -229,13 +237,22 @@ impl App {
             visual: VisualState::new(visuals, VisualMode::from_config(&config.visuals.mode)),
             fx: Effects::new(config.ui.animations),
             fullscreen: false,
-            theme_name: config.theme.preset.clone(),
+            palettes: PaletteSet::presets_only(&config.theme.preset),
             keymap: Keymap::defaults(),
             layouts: LayoutSet::presets_only(),
             screen_width: 120,
             hotkeys: None,
             library_refresh: None,
         }
+    }
+
+    /// The saved colors win over config.toml, once something was chosen.
+    pub fn with_palettes(mut self, palettes: PaletteSet) -> Self {
+        if palettes.restored {
+            self.theme = palettes.current().theme();
+        }
+        self.palettes = palettes;
+        self
     }
 
     pub fn with_layouts(mut self, layouts: LayoutSet) -> Self {
@@ -482,6 +499,7 @@ impl App {
             Mode::Help => self.mode = Mode::Normal,
             Mode::Settings { .. } => self.key_settings(key),
             Mode::LayoutEdit { .. } => self.key_layout_edit(key),
+            Mode::PaletteEdit { .. } => self.key_palette_edit(key),
             Mode::ConfirmModel { .. } => self.key_confirm_model(key),
         }
     }
@@ -521,20 +539,12 @@ impl App {
             KeyCode::Char('?') => self.mode = Mode::Help,
             KeyCode::Char('S') => self.open_settings(),
             KeyCode::Char('E') => self.open_layout_editor(),
+            KeyCode::Char('C') => self.open_palette_editor(),
             KeyCode::Char('T') => self.next_theme(),
             KeyCode::Char('c') => self.start_create(),
             KeyCode::Char('e') => self.start_rename(),
             KeyCode::Char('d') | KeyCode::Delete => self.delete_selected(),
             _ => {}
-        }
-    }
-
-    fn next_theme(&mut self) {
-        let name = theme::next_preset(&self.theme_name);
-        if let Some(t) = Theme::preset(name) {
-            self.theme = t;
-            self.theme_name = name.to_owned();
-            self.status = format!("Theme: {name}");
         }
     }
 

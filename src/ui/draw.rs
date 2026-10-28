@@ -105,7 +105,7 @@ impl App {
 
     /// Left panel: tabs, an info line and the list.
     fn draw_browser(&mut self, f: &mut Frame, area: Rect) {
-        let block = self.block("");
+        let block = self.block_n("", 1);
         let inner = block.inner(area);
         f.render_widget(block, area);
         let [tabs_area, info_area, body] = Layout::vertical([
@@ -325,6 +325,7 @@ impl App {
             Mode::Normal | Mode::Search => {}
             Mode::Help => self.draw_help(f, screen),
             Mode::LayoutEdit { .. } => {}
+            Mode::PaletteEdit { .. } => self.draw_palette_editor(f, screen),
             Mode::Settings { state, capturing } => {
                 let (mut st, cap) = (std::mem::take(state), *capturing);
                 self.draw_settings(f, screen, &mut st, cap);
@@ -420,11 +421,16 @@ impl App {
     }
 
     pub(super) fn block<'a>(&self, title: &'a str) -> Block<'a> {
+        self.block_n(title, 0)
+    }
+
+    /// A panel frame; `n` picks the title color from the palette's rotation.
+    pub(super) fn block_n<'a>(&self, title: &'a str, n: usize) -> Block<'a> {
         Block::new()
             .borders(Borders::ALL)
             .title(title)
             .border_style(Style::new().fg(self.theme.border))
-            .title_style(Style::new().fg(self.theme.accent))
+            .title_style(Style::new().fg(self.theme.rotating(n)))
     }
 }
 

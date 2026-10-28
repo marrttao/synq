@@ -13,11 +13,12 @@ use crate::keys::Action;
 pub(super) const HELP: &[(&str, &str)] = &[
     ("S", "settings: choose keys, make them work everywhere"),
     ("E", "layout editor: move, resize, hide panels"),
+    ("C", "color editor: any number of colors"),
+    ("T", "next color palette"),
     ("a", "add to a playlist"),
     ("/", "search (Enter keeps the filter, Esc clears it)"),
     ("g", "choose the GIF (Tab: playlist or global)"),
     ("t", "recognize lyrics again (Whisper)"),
-    ("T", "next color theme"),
     ("Tab", "Library / Playlists / Favorites"),
     ("Enter", "play, or open a playlist"),
     ("c / e / d", "playlists: create / rename / delete"),

@@ -329,7 +329,7 @@ impl App {
             Some(a) => format!("Visual: {}", a.name),
             None => "Visual".to_owned(),
         };
-        let block = self.block(&title);
+        let block = self.block_n(&title, 3);
         let inner = block.inner(area);
         f.render_widget(block, area);
         if inner.width == 0 || inner.height == 0 {

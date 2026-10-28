@@ -11,7 +11,13 @@ pub struct Theme {
     pub dim: Color,
     pub accent: Color,
     pub border: Color,
+    /// Colors beyond the five basic ones (custom palettes only).
+    extras: [Color; MAX_EXTRAS],
+    extra_count: usize,
 }
+
+/// A palette has 5 basic colors and up to this many more.
+pub const MAX_EXTRAS: usize = 7;
 
 /// Built-in color sets: name, then background, foreground, dim, accent, border.
 const PRESETS: [(&str, [u32; 5]); 5] = [
@@ -40,7 +46,59 @@ impl Theme {
             dim: rgb(c[2]),
             accent: rgb(c[3]),
             border: rgb(c[4]),
+            extras: [Color::Reset; MAX_EXTRAS],
+            extra_count: 0,
         })
+    }
+
+    /// Names and five colors of each built-in set.
+    pub fn preset_list() -> Vec<(&'static str, Vec<[u8; 3]>)> {
+        PRESETS
+            .iter()
+            .map(|(n, c)| {
+                let rgb = c
+                    .iter()
+                    .map(|v| [(v >> 16) as u8, (v >> 8) as u8, *v as u8]);
+                (*n, rgb.collect())
+            })
+            .collect()
+    }
+
+    /// A theme from any number (at least 2) of colors. In order: background,
+    /// text, accent, dim text, border; what is missing is mixed from the
+    /// background and text colors. Further colors rotate with the accent
+    /// (current lyric line, panel titles).
+    pub fn from_colors(colors: &[[u8; 3]]) -> Self {
+        let get = |i: usize| colors.get(i).copied();
+        let bg = get(0).unwrap_or([0, 0, 0]);
+        let fg = get(1).unwrap_or([255, 255, 255]);
+        let accent = get(2).unwrap_or(fg);
+        let dim = get(3).unwrap_or_else(|| mix(bg, fg, 45));
+        let border = get(4).unwrap_or_else(|| mix(bg, fg, 20));
+        let c = |v: [u8; 3]| Color::Rgb(v[0], v[1], v[2]);
+        let mut extras = [Color::Reset; MAX_EXTRAS];
+        let mut extra_count = 0;
+        for (slot, v) in extras.iter_mut().zip(colors.iter().skip(5)) {
+            *slot = c(*v);
+            extra_count += 1;
+        }
+        Self {
+            background: c(bg),
+            foreground: c(fg),
+            dim: c(dim),
+            accent: c(accent),
+            border: c(border),
+            extras,
+            extra_count,
+        }
+    }
+
+    /// The i-th color of the rotation: the accent, then the extra colors.
+    pub fn rotating(&self, i: usize) -> Color {
+        match i % (self.extra_count + 1) {
+            0 => self.accent,
+            k => self.extras[k - 1],
+        }
     }
 
     /// The preset named in the config, with the individual colors on top.
@@ -54,6 +112,8 @@ impl Theme {
                 dim: Color::Reset,
                 accent: Color::Reset,
                 border: Color::Reset,
+                extras: [Color::Reset; MAX_EXTRAS],
+                extra_count: 0,
             });
         let pick = |value: &str, fallback: Color| parse_hex(value).unwrap_or(fallback);
         Self {
@@ -62,15 +122,15 @@ impl Theme {
             dim: pick(&cfg.dim, base.dim),
             accent: pick(&cfg.accent, base.accent),
             border: pick(&cfg.border, base.border),
+            ..base
         }
     }
 }
 
-/// Name of the preset after `current` (wraps around; unknown -> the first).
-pub fn next_preset(current: &str) -> &'static str {
-    let current = current.trim().to_lowercase();
-    let i = PRESETS.iter().position(|(n, _)| *n == current);
-    PRESETS[i.map_or(0, |i| (i + 1) % PRESETS.len())].0
+/// `a` towards `b`; `percent` 0 is `a`, 100 is `b`.
+fn mix(a: [u8; 3], b: [u8; 3], percent: u32) -> [u8; 3] {
+    let m = |x: u8, y: u8| ((u32::from(x) * (100 - percent) + u32::from(y) * percent) / 100) as u8;
+    [m(a[0], b[0]), m(a[1], b[1]), m(a[2], b[2])]
 }
 
 /// Parse "#rrggbb" (the leading '#' is optional).
@@ -88,6 +148,28 @@ pub fn parse_hex(s: &str) -> Option<Color> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn any_number_of_colors_makes_a_theme() {
+        let c = |v: u8| [v, v, v];
+        let two = Theme::from_colors(&[c(0), c(200)]);
+        assert_eq!(two.background, Color::Rgb(0, 0, 0));
+        assert_eq!(two.accent, two.foreground);
+        assert_ne!(two.dim, two.background);
+        assert_ne!(two.border, two.background);
+        assert_eq!(two.rotating(5), two.accent, "nothing to rotate with");
+
+        let many: Vec<[u8; 3]> = (0..12).map(|i| c(i * 20)).collect();
+        let t = Theme::from_colors(&many);
+        assert_eq!(t.dim, Color::Rgb(60, 60, 60));
+        assert_eq!(t.border, Color::Rgb(80, 80, 80));
+        // Accent, then the seven extras, then round again.
+        assert_eq!(t.rotating(0), t.accent);
+        assert_eq!(t.rotating(1), Color::Rgb(100, 100, 100));
+        assert_eq!(t.rotating(7), Color::Rgb(220, 220, 220));
+        assert_eq!(t.rotating(8), t.accent);
+        assert!(Theme::from_colors(&[]).background == Color::Rgb(0, 0, 0));
+    }
 
     #[test]
     fn parses_hex() {
@@ -137,21 +219,12 @@ mod tests {
     }
 
     #[test]
-    fn presets_cycle_through_all_and_stay_readable() {
-        let mut seen = vec![];
-        let mut name = "default";
-        for _ in 0..PRESETS.len() {
-            seen.push(name);
+    fn presets_stay_readable() {
+        for (name, _) in Theme::preset_list() {
             let t = Theme::preset(name).unwrap();
             assert_ne!(t.background, t.foreground);
             assert_ne!(t.background, t.accent);
             assert_ne!(t.background, t.dim);
-            name = next_preset(name);
         }
-        assert_eq!(name, "default", "the cycle closes");
-        seen.sort_unstable();
-        seen.dedup();
-        assert_eq!(seen.len(), PRESETS.len());
-        assert_eq!(next_preset("???"), "default");
     }
 }
