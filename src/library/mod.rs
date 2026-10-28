@@ -31,21 +31,36 @@ pub enum LibraryEvent {
 }
 
 /// Start the worker. The receiver gets events until the UI drops it.
+#[cfg(test)]
 pub fn spawn(music: PathBuf, db_path: PathBuf) -> Receiver<LibraryEvent> {
+    spawn_refreshable(music, db_path).0
+}
+
+/// Like `spawn`, and also returns a sender: any message on it makes the
+/// worker rescan `music/` right away (the `R` key).
+pub fn spawn_refreshable(music: PathBuf, db_path: PathBuf) -> (Receiver<LibraryEvent>, Sender<()>) {
     let (tx, rx) = mpsc::channel();
+    let (fs_tx, fs_rx) = mpsc::channel();
     let spawned = thread::Builder::new().name("library".into()).spawn({
         let tx = tx.clone();
-        move || run(&music, &db_path, &tx)
+        let fs_tx = fs_tx.clone();
+        move || run(&music, &db_path, &tx, fs_tx, &fs_rx)
     });
     if let Err(e) = spawned {
         tracing::error!("cannot start library thread: {e}");
         // A send error only means the UI is already gone.
         let _ = tx.send(LibraryEvent::Error(format!("library thread: {e}")));
     }
-    rx
+    (rx, fs_tx)
 }
 
-fn run(music: &Path, db_path: &Path, tx: &Sender<LibraryEvent>) {
+fn run(
+    music: &Path,
+    db_path: &Path,
+    tx: &Sender<LibraryEvent>,
+    fs_tx: Sender<()>,
+    fs_rx: &Receiver<()>,
+) {
     let mut db = match Db::open(db_path) {
         Ok(db) => db,
         Err(e) => {
@@ -57,7 +72,6 @@ fn run(music: &Path, db_path: &Path, tx: &Sender<LibraryEvent>) {
     let mut bad = scan::BadFiles::new();
 
     // Watch before the first scan so nothing slips through in between.
-    let (fs_tx, fs_rx) = mpsc::channel();
     let _watcher = start_watcher(music, fs_tx, tx);
 
     loop {

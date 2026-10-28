@@ -79,6 +79,8 @@ pub struct WhisperConfig {
 pub struct VisualsConfig {
     /// Image protocol: auto / kitty / sixel / iterm2 / halfblocks.
     pub protocol: String,
+    /// How the picture is drawn: "picture" or "ascii" (key `v` switches).
+    pub mode: String,
     /// Pause GIF animation together with the music.
     pub pause_with_music: bool,
 }
@@ -131,6 +133,7 @@ impl Default for VisualsConfig {
     fn default() -> Self {
         Self {
             protocol: "auto".into(),
+            mode: "picture".into(),
             pause_with_music: true,
         }
     }
@@ -174,6 +177,8 @@ language = "auto"
 [visuals]
 # Image protocol: auto / kitty / sixel / iterm2 / halfblocks.
 protocol = "auto"
+# How the picture is drawn: "picture" or "ascii" (key v switches).
+mode = "picture"
 # Pause GIF animation together with the music.
 pause_with_music = true
 "##;

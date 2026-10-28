@@ -4,8 +4,11 @@
 mod draw;
 mod effects;
 mod help;
+mod keys_view;
 mod lyrics_view;
 mod player;
+#[cfg(test)]
+mod stage10_tests;
 #[cfg(test)]
 mod stage8_tests;
 mod theme;
@@ -15,7 +18,7 @@ mod whisper_view;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -25,6 +28,8 @@ use ratatui::widgets::ListState;
 
 use crate::config::Config;
 use crate::db::Track;
+use crate::hotkeys::Hotkeys;
+use crate::keys::Keymap;
 use crate::library::LibraryEvent;
 use crate::lyrics;
 use crate::playlists::{self, PlaylistInfo, Target};
@@ -34,7 +39,7 @@ use effects::Effects;
 use lyrics_view::LyricsState;
 use player::Player;
 use theme::Theme;
-use visual_view::VisualState;
+use visual_view::{VisualMode, VisualState};
 use whisper_view::WhisperStatus;
 
 /// ~30 frames per second.
@@ -94,6 +99,11 @@ enum Mode {
     },
     /// The key list.
     Help,
+    /// Choosing keys; `capturing` waits for the next key press.
+    Settings {
+        state: ListState,
+        capturing: bool,
+    },
     /// Choosing the playlist for a track.
     Pick {
         track_id: i64,
@@ -104,8 +114,8 @@ enum Mode {
 /// Keys that make sense while only lyrics and the picture are on screen.
 fn allowed_in_fullscreen(code: KeyCode) -> bool {
     match code {
-        KeyCode::Char(c) => "qpnsrflgtTF?[]+=- ".contains(c),
-        KeyCode::Left | KeyCode::Right | KeyCode::Esc | KeyCode::Up | KeyCode::Down => true,
+        KeyCode::Char(c) => "qgtTS?".contains(c),
+        KeyCode::Esc | KeyCode::Up | KeyCode::Down => true,
         _ => false,
     }
 }
@@ -157,6 +167,10 @@ pub struct App {
     fullscreen: bool,
     /// Name of the color set in use (for `T`).
     theme_name: String,
+    keymap: Keymap,
+    hotkeys: Option<Hotkeys>,
+    /// Makes the library worker rescan `music/` at once.
+    library_refresh: Option<Sender<()>>,
 }
 
 impl App {
@@ -200,11 +214,28 @@ impl App {
             lyrics_state: LyricsState::Idle,
             lyrics_for: None,
             show_lyrics: true,
-            visual: VisualState::new(visuals),
+            visual: VisualState::new(visuals, VisualMode::from_config(&config.visuals.mode)),
             fx: Effects::new(config.ui.animations),
             fullscreen: false,
             theme_name: config.theme.preset.clone(),
+            keymap: Keymap::defaults(),
+            hotkeys: None,
+            library_refresh: None,
         }
+    }
+
+    /// The parts that talk to the system; tests run without them.
+    pub fn with_system(
+        mut self,
+        keymap: Keymap,
+        hotkeys: Option<Hotkeys>,
+        library_refresh: Sender<()>,
+    ) -> Self {
+        self.keymap = keymap;
+        self.hotkeys = hotkeys;
+        self.library_refresh = Some(library_refresh);
+        self.sync_hotkeys();
+        self
     }
 
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
@@ -215,6 +246,7 @@ impl App {
             self.drain_lyrics_events();
             self.drain_transcribe_events();
             self.drain_visual_events();
+            self.drain_hotkeys();
             if let Some(err) = self.player.poll() {
                 self.status = err;
             }
@@ -429,11 +461,16 @@ impl App {
             Mode::Pick { .. } => self.key_pick(key),
             Mode::GifPick { .. } => self.key_gif_pick(key),
             Mode::Help => self.mode = Mode::Normal,
+            Mode::Settings { .. } => self.key_settings(key),
             Mode::ConfirmModel { .. } => self.key_confirm_model(key),
         }
     }
 
     fn key_normal(&mut self, key: KeyEvent) {
+        if let Some(action) = self.keymap.action_for(key) {
+            self.run_action(action);
+            return;
+        }
         if self.fullscreen && !allowed_in_fullscreen(key.code) {
             return;
         }
@@ -458,28 +495,11 @@ impl App {
             KeyCode::Esc => self.go_back(true),
             KeyCode::Backspace => self.go_back(false),
             KeyCode::Char('/') => self.mode = Mode::Search,
-            KeyCode::Char(' ') => {
-                if !self.player.toggle_pause() {
-                    self.play_selected();
-                }
-            }
-            KeyCode::Char('n') => self.player.next(),
-            KeyCode::Char('p') => self.player.prev(),
-            KeyCode::Right => self.seek(true),
-            KeyCode::Left => self.seek(false),
-            KeyCode::Char('+' | '=') => self.player.change_volume(true),
-            KeyCode::Char('-') => self.player.change_volume(false),
-            KeyCode::Char('s') => self.player.toggle_shuffle(),
-            KeyCode::Char('r') => self.player.cycle_repeat(),
-            KeyCode::Char('f') => self.toggle_favorite(),
-            KeyCode::Char('l') => self.show_lyrics = !self.show_lyrics,
             KeyCode::Char('t') => self.recognize_or_retry(),
-            KeyCode::Char('[') => self.shift_lyrics(false),
-            KeyCode::Char(']') => self.shift_lyrics(true),
             KeyCode::Char('a') => self.start_pick(),
             KeyCode::Char('g') => self.start_gif_pick(),
-            KeyCode::Char('F') => self.toggle_fullscreen(),
             KeyCode::Char('?') => self.mode = Mode::Help,
+            KeyCode::Char('S') => self.open_settings(),
             KeyCode::Char('T') => self.next_theme(),
             KeyCode::Char('c') => self.start_create(),
             KeyCode::Char('e') => self.start_rename(),

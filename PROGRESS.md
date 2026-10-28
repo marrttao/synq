@@ -1,5 +1,14 @@
 # PROGRESS
 
+
+## Stage 10: refresh, picture fill, ASCII, rebindable and global keys
+- The picture is cover-cropped to the exact panel size (it fills 100%); first image in `gifs/` is shown until a choice is made, "(none)" is stored as "-".
+- `v`: picture / ASCII (brightness ramp tinted with the pixel color); `visuals.mode` sets the default.
+- `R`: rescans `music/` (library worker gets a refresh sender), resyncs playlists, drops and reloads pictures.
+- `src/keys.rs`: 16 rebindable actions, chords, conflict and reserved-key checks, saved as `bind:<action>` in the settings table. `S` opens the settings window.
+- `src/hotkeys.rs`: Windows RegisterHotKey thread; only Ctrl/Alt/F-key chords may be global. Registration and refusal tested; a real key press from another program was not verified here.
+- Known: Linux has no global keys; `v` and `T` choices are not saved; media keys cannot be bound (terminals do not deliver them).
+
 ## Этап 9. Полировка — выполнен
 
 Сделано:

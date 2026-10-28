@@ -2,6 +2,8 @@
 mod audio;
 mod config;
 mod db;
+mod hotkeys;
+mod keys;
 mod library;
 mod lyrics;
 mod paths;
@@ -43,7 +45,11 @@ fn main() -> Result<()> {
     // after restoring the terminal.
     install_panic_logger();
     let mut terminal = ratatui::try_init().context("cannot initialize the terminal")?;
-    let library_rx = library::spawn(paths.music.clone(), paths.db.clone());
+    let (library_rx, library_refresh) =
+        library::spawn_refreshable(paths.music.clone(), paths.db.clone());
+    let (keymap, keys_problem) = keys::Keymap::load(paths.db.clone());
+    let status = status.or(keys_problem);
+    let hotkeys = hotkeys::Hotkeys::spawn();
     let playlists = playlists::spawn(&paths);
     let lyrics = lyrics::spawn(paths.db.clone(), paths.lyrics.clone(), config.lyrics.online);
     let transcribe = transcribe::spawn(&config.whisper, &paths);
@@ -60,6 +66,7 @@ fn main() -> Result<()> {
         visuals,
         paths.music.clone(),
     )
+    .with_system(keymap, hotkeys, library_refresh)
     .run(&mut terminal);
     ratatui::restore();
 

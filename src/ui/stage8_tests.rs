@@ -76,9 +76,7 @@ fn line(time_ms: u64, text: &str, words: Vec<Word>) -> Line {
 
 #[test]
 fn help_lists_every_key_of_the_spec_and_any_key_closes_it() {
-    for k in [
-        "Space", "n / p", "+ / -", "s", "r", "f", "a", "/", "l", "g", "F", "[ / ]", "t", "q", "?",
-    ] {
+    for k in ["a", "/", "g", "t", "S", "q", "?"] {
         assert!(
             help::HELP.iter().any(|(key, _)| *key == k),
             "the help misses {k}"
@@ -87,7 +85,7 @@ fn help_lists_every_key_of_the_spec_and_any_key_closes_it() {
     let (_tmp, mut app) = make_app(false);
     key(&mut app, KeyCode::Char('?'));
     assert!(matches!(app.mode, Mode::Help));
-    assert!(text(&render(&mut app, 120, 40)).contains("full screen"));
+    assert!(text(&render(&mut app, 120, 40)).contains("Full screen"));
     for (w, h) in [(80, 20), (30, 8), (10, 4), (1, 1)] {
         render(&mut app, w, h);
     }

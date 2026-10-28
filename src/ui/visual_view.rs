@@ -4,12 +4,14 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
+use image::DynamicImage;
+use image::imageops::FilterType;
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
-use ratatui::layout::{Rect, Size};
-use ratatui::style::Style;
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{ListState, Paragraph, Wrap};
-use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
 use ratatui_image::{Resize, StatefulImage};
 
@@ -22,35 +24,114 @@ const SPARE: usize = 2;
 /// After a stall (suspended laptop, huge frame) do not fast-forward.
 const MAX_STEP: Duration = Duration::from_millis(250);
 
-struct Active {
+/// How the picture is drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum VisualMode {
+    /// Real pixels where the terminal can, half blocks otherwise.
+    Picture,
+    /// Characters picked by brightness, tinted with the pixel color.
+    Ascii,
+}
+
+impl VisualMode {
+    pub(super) fn from_config(name: &str) -> Self {
+        if name.trim().eq_ignore_ascii_case("ascii") {
+            Self::Ascii
+        } else {
+            Self::Picture
+        }
+    }
+}
+
+/// Brightness ramp for the ASCII mode, dark to light.
+const RAMP: &[u8] = b" .,:;i1tfLCG08@";
+
+pub(super) struct Active {
     name: String,
-    frames: Vec<StatefulProtocol>,
+    /// Frames as stored; the panel versions are made from them on demand.
+    images: Vec<DynamicImage>,
     delays: Vec<Duration>,
     clock: Clock,
+    /// Panel size (cells) the caches below were made for.
+    sized_for: (u16, u16),
+    protocols: Vec<Option<StatefulProtocol>>,
+    ascii: Vec<Option<Vec<Line<'static>>>>,
 }
 
 impl Active {
-    fn new(picker: &Picker, name: String, animation: Animation) -> Self {
-        let mut frames = Vec::new();
+    fn new(name: String, animation: Animation) -> Self {
+        let mut images = Vec::new();
         let mut delays = Vec::new();
         for f in animation.frames {
             delays.push(f.delay);
-            frames.push(picker.new_resize_protocol(f.image));
+            images.push(f.image);
         }
         Self {
             name,
-            frames,
+            protocols: (0..images.len()).map(|_| None).collect(),
+            ascii: vec![None; images.len()],
+            images,
             delays,
             clock: Clock::default(),
+            sized_for: (0, 0),
         }
     }
+
+    fn fit_caches(&mut self, size: (u16, u16)) {
+        if self.sized_for != size {
+            self.sized_for = size;
+            self.protocols.iter_mut().for_each(|p| *p = None);
+            self.ascii.iter_mut().for_each(|a| *a = None);
+        }
+    }
+}
+
+/// The picture scaled to cover `w` x `h` pixels completely; what does not
+/// fit the panel's proportions is cut off at the edges.
+fn cover(image: &DynamicImage, w: u32, h: u32) -> DynamicImage {
+    image.resize_to_fill(w.max(1), h.max(1), FilterType::Triangle)
+}
+
+/// One text line per panel row, `cols` characters wide.
+fn ascii_lines(image: &DynamicImage, cols: u16, rows: u16) -> Vec<Line<'static>> {
+    // A character cell is about twice as tall as it is wide.
+    let img = cover(image, u32::from(cols), u32::from(rows) * 2).to_rgba8();
+    (0..u32::from(rows))
+        .map(|row| {
+            let spans: Vec<Span<'static>> = (0..u32::from(cols))
+                .map(|col| {
+                    let (mut sum, mut alpha) = ([0u32; 3], 0u32);
+                    for y in [row * 2, row * 2 + 1] {
+                        let p = img.get_pixel(col, y.min(img.height() - 1));
+                        let a = u32::from(p[3]);
+                        for i in 0..3 {
+                            sum[i] += u32::from(p[i]) * a / 255;
+                        }
+                        alpha += a;
+                    }
+                    let [r, g, b] = sum.map(|c| (c / 2) as u8);
+                    let luma =
+                        (u32::from(r) * 299 + u32::from(g) * 587 + u32::from(b) * 114) / 1000;
+                    let idx = if alpha < 40 {
+                        0
+                    } else {
+                        (luma as usize * (RAMP.len() - 1) + 127) / 255
+                    };
+                    // Very dark pixels would be invisible; lift the color a bit.
+                    let tint = Color::Rgb(r.max(48), g.max(48), b.max(48));
+                    Span::styled(char::from(RAMP[idx]).to_string(), Style::new().fg(tint))
+                })
+                .collect();
+            Line::from(spans)
+        })
+        .collect()
 }
 
 pub(super) struct VisualState {
     handle: visuals::Handle,
     global: Option<String>,
     per_playlist: HashMap<i64, String>,
-    active: Option<Active>,
+    pub(super) active: Option<Active>,
     spare: Vec<Active>,
     /// Name a load was requested for and has not come back yet.
     requested: Option<String>,
@@ -64,11 +145,19 @@ pub(super) struct VisualState {
     snapshot_seen: bool,
     /// The user chose something already; older saved choices must not win.
     chosen: bool,
+    /// First picture in `gifs/`: shown while nothing was chosen at all.
+    auto: Option<String>,
+    pub(super) mode: VisualMode,
 }
 
+/// Stored as the global choice when the user picked "(none)", so that the
+/// automatic first picture does not come back.
+const NO_PICTURE: &str = "-";
+
 impl VisualState {
-    pub(super) fn new(handle: visuals::Handle) -> Self {
+    pub(super) fn new(handle: visuals::Handle, mode: VisualMode) -> Self {
         Self {
+            mode,
             handle,
             global: None,
             per_playlist: HashMap::new(),
@@ -81,7 +170,19 @@ impl VisualState {
             play_context: None,
             snapshot_seen: false,
             chosen: false,
+            auto: None,
         }
+    }
+
+    /// Look at `gifs/` again: new files appear, failed ones may be retried
+    /// and everything on screen is decoded afresh.
+    pub(super) fn rescan(&mut self) {
+        self.auto = visuals::list_images(&self.handle.dir).into_iter().next();
+        self.failed.clear();
+        self.error = None;
+        self.requested = None;
+        self.active = None;
+        self.spare.clear();
     }
 }
 
@@ -93,18 +194,28 @@ fn clock_runs(pause_with_music: bool, playing: bool) -> bool {
 
 impl App {
     /// The picture for what is playing: the playlist's own, else the global.
-    fn desired_gif(&self) -> Option<String> {
+    pub(super) fn desired_gif(&self) -> Option<String> {
         let own = self
             .visual
             .play_context
             .and_then(|id| self.visual.per_playlist.get(&id));
-        own.or(self.visual.global.as_ref()).cloned()
+        if own.is_some() {
+            return own.cloned();
+        }
+        match self.visual.global.as_deref() {
+            Some(NO_PICTURE) => None,
+            Some(name) => Some(name.to_owned()),
+            None => self.visual.auto.clone(),
+        }
     }
 
     pub(super) fn drain_visual_events(&mut self) {
         while let Ok(ev) = self.visual.handle.events.try_recv() {
             match ev {
                 Event::Choices { global, playlists } => {
+                    self.visual.auto = visuals::list_images(&self.visual.handle.dir)
+                        .into_iter()
+                        .next();
                     if !self.visual.chosen {
                         self.visual.global = global;
                         self.visual.per_playlist = playlists;
@@ -118,7 +229,7 @@ impl App {
                         self.visual.requested = None;
                     }
                     self.visual.error = None;
-                    let loaded = Active::new(&self.visual.handle.picker, name.clone(), animation);
+                    let loaded = Active::new(name.clone(), animation);
                     let wanted = self.desired_gif().as_deref() == Some(name.as_str());
                     if wanted {
                         if let Some(old) = self.visual.active.replace(loaded) {
@@ -224,25 +335,37 @@ impl App {
         if inner.width == 0 || inner.height == 0 {
             return;
         }
+        let mode = self.visual.mode;
         if let Some(active) = &mut self.visual.active
-            && !active.frames.is_empty()
+            && !active.images.is_empty()
         {
-            let index = active.clock.index().min(active.frames.len() - 1);
-            let proto = &mut active.frames[index];
-            let fit = Size::new(inner.width, inner.height);
-            let size = proto.size_for(Resize::Scale(None), fit);
-            let (w, h) = (size.width.min(inner.width), size.height.min(inner.height));
-            let rect = Rect {
-                x: inner.x + (inner.width - w) / 2,
-                y: inner.y + (inner.height - h) / 2,
-                width: w,
-                height: h,
-            };
-            f.render_stateful_widget(
-                StatefulImage::<StatefulProtocol>::default().resize(Resize::Scale(None)),
-                rect,
-                proto,
-            );
+            active.fit_caches((inner.width, inner.height));
+            let index = active.clock.index().min(active.images.len() - 1);
+            match mode {
+                VisualMode::Ascii => {
+                    let lines = active.ascii[index].get_or_insert_with(|| {
+                        ascii_lines(&active.images[index], inner.width, inner.height)
+                    });
+                    f.render_widget(Paragraph::new(lines.clone()), inner);
+                }
+                VisualMode::Picture => {
+                    let picker = &self.visual.handle.picker;
+                    let proto = active.protocols[index].get_or_insert_with(|| {
+                        let font = picker.font_size();
+                        let filled = cover(
+                            &active.images[index],
+                            u32::from(inner.width) * u32::from(font.width),
+                            u32::from(inner.height) * u32::from(font.height),
+                        );
+                        picker.new_resize_protocol(filled)
+                    });
+                    f.render_stateful_widget(
+                        StatefulImage::<StatefulProtocol>::default().resize(Resize::Fit(None)),
+                        inner,
+                        proto,
+                    );
+                }
+            }
             return;
         }
         let text = if let Some(e) = &self.visual.error {
@@ -364,8 +487,10 @@ impl App {
                 self.status = format!("GIF of playlist \"{pl_name}\": {shown}");
             }
             None => {
-                self.visual.global.clone_from(&name);
-                self.visual.handle.send(Command::SetGlobal(name));
+                // "(none)" is remembered, otherwise the first picture returns.
+                let stored = name.clone().unwrap_or_else(|| NO_PICTURE.to_owned());
+                self.visual.global = Some(stored.clone());
+                self.visual.handle.send(Command::SetGlobal(Some(stored)));
                 self.status = format!("Global GIF: {shown}");
             }
         }
@@ -506,7 +631,26 @@ mod tests {
         pump(&mut app, "gif loaded", |a| a.visual.active.is_some());
         let buf = render(&mut app, 120, 30);
         assert!(text(&buf).contains("Visual: a.gif"));
-        assert!(text(&buf).contains('\u{2580}'), "half blocks are drawn");
+        // The picture covers the whole panel, not a part of it.
+        let red = ratatui::style::Color::Rgb(255, 0, 0);
+        let painted = buf
+            .content()
+            .iter()
+            .filter(|c| c.fg == red || c.bg == red)
+            .count();
+        // 120 columns: the panel is 24% wide, 30 rows minus the player bar.
+        assert!(painted > 25 * 20, "the picture fills its panel: {painted}");
+
+        // ASCII mode draws characters instead.
+        app.visual.mode = VisualMode::Ascii;
+        let buf = render(&mut app, 120, 30);
+        let tinted = buf
+            .content()
+            .iter()
+            .filter(|c| c.fg == ratatui::style::Color::Rgb(255, 48, 48))
+            .count();
+        assert!(tinted > 25 * 20, "ASCII fills the panel too: {tinted}");
+        app.visual.mode = VisualMode::Picture;
 
         // Nothing is playing and the animation pauses with the music: still.
         std::thread::sleep(Duration::from_millis(150));

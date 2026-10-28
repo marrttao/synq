@@ -329,6 +329,13 @@ impl App {
         match &mut self.mode {
             Mode::Normal | Mode::Search => {}
             Mode::Help => self.draw_help(f, screen),
+            Mode::Settings { state, capturing } => {
+                let (mut st, cap) = (std::mem::take(state), *capturing);
+                self.draw_settings(f, screen, &mut st, cap);
+                if let Mode::Settings { state, .. } = &mut self.mode {
+                    *state = st;
+                }
+            }
             Mode::Prompt { rename, text } => {
                 let title = if rename.is_some() {
                     "Rename playlist"

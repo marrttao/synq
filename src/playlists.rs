@@ -438,10 +438,21 @@ pub struct Snapshot {
 #[derive(Debug)]
 pub enum Command {
     Create(String),
-    Rename { id: i64, name: String },
+    Rename {
+        id: i64,
+        name: String,
+    },
     Delete(i64),
-    Add { target: Target, track: i64 },
-    Remove { target: Target, track: i64 },
+    Add {
+        target: Target,
+        track: i64,
+    },
+    Remove {
+        target: Target,
+        track: i64,
+    },
+    /// Check the playlist folders against the database again.
+    Resync,
 }
 
 #[derive(Debug)]
@@ -531,6 +542,10 @@ fn send_snapshot(manager: &Manager, tx: &Sender<Event>) {
 /// Run one command; the returned text is shown to the user.
 fn execute(m: &Manager, cmd: Command) -> Result<Option<String>> {
     Ok(match cmd {
+        Command::Resync => {
+            m.sync_all()?;
+            Some("Playlists refreshed".to_owned())
+        }
         Command::Create(name) => {
             m.create_playlist(&name)?;
             Some(format!("Created playlist \"{}\"", name.trim()))
