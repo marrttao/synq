@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use lofty::prelude::*;
+use lofty::probe::Probe;
 use thiserror::Error;
 
 pub const UNKNOWN_ARTIST: &str = "Unknown Artist";
@@ -22,7 +23,12 @@ pub struct TagInfo {
 }
 
 pub fn read_tags(path: &Path) -> Result<TagInfo, TagError> {
-    let tagged = lofty::read_from_path(path)?;
+    // The kind of file is taken from its content, not its name: downloads
+    // are often an MP4/M4A container called ".mp3".
+    let tagged = Probe::open(path)?
+        .guess_file_type()
+        .map_err(lofty::error::FileParseError::from)?
+        .read()?;
     let tag = tagged.primary_tag().or_else(|| tagged.first_tag());
     let (title, artist, album) = normalize(
         tag.and_then(|t| t.title()).as_deref(),
@@ -87,6 +93,25 @@ mod tests {
         assert_eq!(
             (t.as_str(), a.as_str(), al.as_str()),
             ("a", UNKNOWN_ARTIST, "")
+        );
+    }
+}
+
+#[cfg(test)]
+mod misnamed {
+    use super::*;
+
+    #[test]
+    fn a_file_is_recognized_by_content_not_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("really a wav.mp3");
+        std::fs::write(&path, crate::testutil::wav_bytes(1500)).unwrap();
+        let info = read_tags(&path).unwrap();
+        assert_eq!(info.title, "really a wav");
+        assert!(
+            (1400..=1600).contains(&info.duration_ms),
+            "{}",
+            info.duration_ms
         );
     }
 }

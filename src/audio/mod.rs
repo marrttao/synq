@@ -4,6 +4,7 @@
 //! thread owns the output device, the current track and the play queue.
 
 pub mod queue;
+pub mod scope;
 
 use std::fs::File;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -54,14 +55,18 @@ pub enum Event {
 pub struct Audio {
     tx: Sender<Command>,
     pub events: Receiver<Event>,
+    /// What is being played, for the visualizer.
+    pub scope: std::sync::Arc<scope::Scope>,
 }
 
 impl Audio {
     pub fn spawn(volume: f32, shuffle: bool, repeat: Repeat) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let (ev_tx, ev_rx) = mpsc::channel();
+        let scope = scope::Scope::new();
         let spawned = thread::Builder::new().name("audio".into()).spawn({
             let ev_tx = ev_tx.clone();
+            let scope = scope.clone();
             move || {
                 Engine {
                     events: ev_tx,
@@ -71,6 +76,7 @@ impl Audio {
                     volume: volume.clamp(0.0, 1.0),
                     shuffle,
                     repeat,
+                    scope,
                 }
                 .run(&cmd_rx);
             }
@@ -83,6 +89,7 @@ impl Audio {
         Self {
             tx: cmd_tx,
             events: ev_rx,
+            scope,
         }
     }
 
@@ -109,6 +116,7 @@ struct Engine {
     volume: f32,
     shuffle: bool,
     repeat: Repeat,
+    scope: std::sync::Arc<scope::Scope>,
 }
 
 impl Engine {
@@ -297,7 +305,7 @@ impl Engine {
             .clone();
         let player = Player::connect_new(&mixer);
         player.set_volume(volume);
-        player.append(decoder);
+        player.append(scope::Tap::new(decoder, self.scope.clone()));
         // Replacing the old player stops it.
         self.player = Some(player);
         self.emit(Event::Started { id: item.id });
@@ -344,6 +352,9 @@ mod tests {
             }
         }
         assert_eq!(started, [0, 1], "both tracks play in order, then stop");
+        // What was played went through the tap that feeds the visualizer.
+        let (samples, rate, _) = audio.scope.recent(256).expect("samples for the visualizer");
+        assert_eq!((samples.len(), rate), (256, 8000));
     }
 
     #[test]

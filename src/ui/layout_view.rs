@@ -11,7 +11,9 @@ use ratatui::crossterm::event::{
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap,
+};
 
 use super::layout::{Layout, Module, Place, presets};
 use super::{App, Mode};
@@ -22,9 +24,9 @@ const STEP: i16 = 5;
 const CORNER_COLS: u16 = 3;
 const CORNER_ROWS: u16 = 2;
 
-/// Library, Lyrics, Visual from bottom to top as drawn on the screen:
+/// Library, Lyrics, Visual, Sound from bottom to top as drawn on the screen:
 /// the picture is at the bottom, so lyrics can be placed over it.
-const Z_ORDER: [usize; 3] = [2, 0, 1];
+const Z_ORDER: [usize; 4] = [2, 0, 3, 1];
 
 /// A mouse drag in progress.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,6 +65,7 @@ impl App {
             draft,
             selected: 0,
             drag: None,
+            adding: None,
         };
         self.set_mouse(true);
         self.status = "Layout editor".into();
@@ -93,11 +96,37 @@ impl App {
     pub(super) fn key_layout_edit(&mut self, key: KeyEvent) {
         let width = self.screen_width;
         let Mode::LayoutEdit {
-            draft, selected, ..
+            draft,
+            selected,
+            adding,
+            ..
         } = &mut self.mode
         else {
             return;
         };
+        // The list of removed panels takes all keys while it is open.
+        if let Some(list) = adding {
+            let removed = removed_panels(draft);
+            let row = list.selected().unwrap_or(0);
+            match key.code {
+                KeyCode::Esc | KeyCode::Insert => *adding = None,
+                KeyCode::Down => list.select(Some((row + 1).min(removed.len().saturating_sub(1)))),
+                KeyCode::Up => list.select(Some(row.saturating_sub(1))),
+                KeyCode::Enter => {
+                    if let Some(&module) = removed.get(row) {
+                        match draft.place_mut(module) {
+                            Some(p) => p.visible = true,
+                            None => draft.player = true,
+                        }
+                        *selected = module as usize;
+                        self.status = format!("Added {}", module.label());
+                    }
+                    *adding = None;
+                }
+                _ => {}
+            }
+            return;
+        }
         let module = Module::ALL[*selected % Module::ALL.len()];
         // Shift or Ctrl with an arrow resizes instead of moving.
         let resize = key
@@ -141,6 +170,24 @@ impl App {
                 Some(p) => p.visible = !p.visible,
                 None => draft.player = !draft.player,
             },
+            // Take the selected panel away...
+            KeyCode::Delete => {
+                match draft.place_mut(module) {
+                    Some(p) => p.visible = false,
+                    None => draft.player = false,
+                }
+                self.status = format!("Removed {} (Insert adds it back)", module.label());
+            }
+            // ...and put a removed one back.
+            KeyCode::Insert => {
+                if removed_panels(draft).is_empty() {
+                    self.status = "Every panel is already on the screen".into();
+                } else {
+                    let mut list = ListState::default();
+                    list.select(Some(0));
+                    *adding = Some(list);
+                }
+            }
             // 1, 2, 3...: start again from one of the built-in layouts.
             KeyCode::Char(c @ '1'..='9') => {
                 let n = usize::from(c as u8 - b'1');
@@ -173,6 +220,7 @@ impl App {
             draft,
             selected,
             drag,
+            adding: None,
         } = &mut self.mode
         else {
             return;
@@ -247,7 +295,10 @@ impl App {
     /// The whole editor screen: labelled boxes and the help.
     pub(super) fn draw_layout_editor(&self, f: &mut Frame, screen: Rect, main: Rect) {
         let Mode::LayoutEdit {
-            draft, selected, ..
+            draft,
+            selected,
+            adding,
+            ..
         } = &self.mode
         else {
             return;
@@ -365,7 +416,7 @@ impl App {
                 "Selected: {now}.  Drag a panel with the mouse; drag its corner to resize."
             )),
             Line::from(
-                "Tab: next panel | arrows: move | Shift+arrows: resize | +/-: scale | Space: hide/show | 1-3: start from a preset",
+                "Tab: next panel | arrows: move | Shift+arrows: resize | +/-: scale | Del: remove | Ins: add a removed panel | 1-3: start from a preset",
             ),
             Line::from("Enter: save | F3: save as new | F4: delete | Esc: cancel"),
         ];
@@ -379,7 +430,51 @@ impl App {
                 )),
             area,
         );
+
+        if let Some(list) = adding {
+            let removed = removed_panels(draft);
+            let height = (removed.len() as u16 + 2).min(main.height.max(3));
+            let width = 40.min(screen.width);
+            let popup = Rect {
+                x: screen.x + (screen.width - width) / 2,
+                y: main.y + main.height.saturating_sub(height) / 2,
+                width,
+                height,
+            };
+            f.render_widget(Clear, popup);
+            let items: Vec<ListItem> = removed
+                .iter()
+                .map(|m| ListItem::new(m.label().to_owned()))
+                .collect();
+            let mut state = *list;
+            f.render_stateful_widget(
+                List::new(items)
+                    .block(super::draw::popup_block(
+                        theme,
+                        "Add a panel (Up/Down, Enter, Esc)",
+                    ))
+                    .highlight_style(
+                        Style::new()
+                            .bg(theme.accent)
+                            .fg(theme.background)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                popup,
+                &mut state,
+            );
+        }
     }
+}
+
+/// Panels that are not on the screen now, in the order of the menu.
+fn removed_panels(draft: &Layout) -> Vec<Module> {
+    Module::ALL
+        .into_iter()
+        .filter(|&m| match draft.place(m) {
+            Some(p) => !p.visible,
+            None => !draft.player,
+        })
+        .collect()
 }
 
 fn inside(r: Rect, col: u16, row: u16) -> bool {

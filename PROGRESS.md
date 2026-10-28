@@ -1,6 +1,13 @@
 # PROGRESS
 
 
+## Stage 14: visualizer, bigger picture, one-word lyrics, fixes
+- Files are recognized by content (lofty `guess_file_type`): an MP4 named .mp3 was skipped before, so F5 seemed to do nothing. The library now says how many files could not be read.
+- `fit` mode with a crop allowance (`visuals.max_crop`, keys z/Z); the blurred backdrop is only what is left.
+- Sound panel: `audio::scope::Tap` copies the played samples to a shared buffer, `ui/spectrum.rs` (own FFT, 64 log bands, attack/decay), `ui/viz_view.rs`. Part of all standard layouts; old custom layouts load with it off.
+- Layout editor: Delete removes a panel, Insert adds a removed one back.
+- One-word lyrics mode (`w`, `W` font), `install.ps1`.
+
 ## Stage 13: easier to use
 - Standard keys: `f` full screen, `*` favorite, F5 refresh, `{ }` layouts, `( )` palettes, Shift+arrows seek 30 s; every pair has a back key. Russian layout is mapped to the Latin keys (`keys::latin_for`).
 - The list highlight follows the playing track; messages name the track; old messages give way to the key hint line.

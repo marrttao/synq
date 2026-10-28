@@ -258,6 +258,7 @@ fn the_editor_moves_resizes_hides_and_saves_a_new_layout() {
     key(&mut app, KeyCode::Tab);
     key(&mut app, KeyCode::Char(' ')); // Visual off
     key(&mut app, KeyCode::Tab);
+    key(&mut app, KeyCode::Tab);
     key(&mut app, KeyCode::Char(' ')); // player bar off
     let Mode::LayoutEdit { draft, .. } = &app.mode else {
         panic!("still editing")
@@ -702,4 +703,83 @@ fn the_lyrics_have_a_dark_backdrop_over_the_picture() {
     };
     assert!(r < 120 && r > 20, "darkened, not solid: {r}");
     assert!(g < 60 && b < 60, "{g} {b}");
+}
+
+#[test]
+fn panels_can_be_removed_and_added_back_in_the_editor() {
+    use super::layout::Module;
+    let (_tmp, _paths, mut app) = setup_with_db();
+    key(&mut app, KeyCode::Char('E'));
+    let shown = |app: &App, m: Module| {
+        let Mode::LayoutEdit { draft, .. } = &app.mode else {
+            panic!("editing")
+        };
+        draft.place(m).map_or(draft.player, |p| p.visible)
+    };
+    assert!(shown(&app, Module::Library) && shown(&app, Module::Visualizer));
+    // Remove the Library (selected first), then the Sound panel.
+    key(&mut app, KeyCode::Delete);
+    assert!(!shown(&app, Module::Library));
+    assert!(app.status.contains("Insert"), "{}", app.status);
+    key(&mut app, KeyCode::Tab);
+    key(&mut app, KeyCode::Tab);
+    key(&mut app, KeyCode::Tab);
+    key(&mut app, KeyCode::Delete);
+    assert!(!shown(&app, Module::Visualizer));
+    // Add one back from the list.
+    key(&mut app, KeyCode::Insert);
+    let t = screen_text(&mut app, 120, 30);
+    assert!(t.contains("Add a panel") && t.contains("Library") && t.contains("Sound"));
+    for (w, h) in [(60, 20), (30, 8), (1, 1)] {
+        screen_text(&mut app, w, h);
+    }
+    key(&mut app, KeyCode::Down); // Library, Sound: pick the second
+    key(&mut app, KeyCode::Enter);
+    assert!(shown(&app, Module::Visualizer) && !shown(&app, Module::Library));
+    // Keys do nothing else while the list is open.
+    key(&mut app, KeyCode::Insert);
+    key(&mut app, KeyCode::Char(' '));
+    key(&mut app, KeyCode::Esc);
+    assert!(matches!(app.mode, Mode::LayoutEdit { adding: None, .. }));
+    // The player bar can be removed and added too.
+    key(&mut app, KeyCode::Tab);
+    key(&mut app, KeyCode::Delete);
+    assert!(!shown(&app, Module::Player));
+    key(&mut app, KeyCode::Insert);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Enter);
+    assert!(shown(&app, Module::Player));
+    // Nothing left to add: the list does not open.
+    key(&mut app, KeyCode::Insert);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::Insert);
+    assert!(matches!(app.mode, Mode::LayoutEdit { adding: None, .. }));
+    assert!(app.status.contains("already"), "{}", app.status);
+}
+
+#[test]
+fn the_sound_panel_is_in_the_standard_layouts_and_draws_bars() {
+    let (_tmp, _paths, mut app) = setup_with_db();
+    for _ in 0..3 {
+        let t = screen_text(&mut app, 120, 30);
+        assert!(t.contains("Sound"), "{}", app.layouts.current().name);
+        key(&mut app, KeyCode::Char('}'));
+    }
+    // With a signal the bars have height; without one they are empty.
+    let buf_with = |app: &mut App, level: f32| {
+        app.spectrum.bands = [level; super::spectrum::BANDS];
+        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
+        t.draw(|f| app.draw(f)).unwrap();
+        t.backend()
+            .buffer()
+            .content()
+            .iter()
+            .filter(|c| {
+                ('\u{2581}'..='\u{2588}').contains(&c.symbol().chars().next().unwrap_or(' '))
+            })
+            .count()
+    };
+    assert_eq!(buf_with(&mut app, 0.0), 0);
+    assert!(buf_with(&mut app, 1.0) > 20);
 }

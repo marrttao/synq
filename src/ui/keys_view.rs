@@ -45,6 +45,8 @@ impl App {
             Action::LyricsLater => self.shift_lyrics(true),
             Action::Fullscreen => self.toggle_fullscreen(),
             Action::PictureMode => self.toggle_picture_mode(),
+            Action::PictureZoomIn => self.zoom_picture(10),
+            Action::PictureZoomOut => self.zoom_picture(-10),
             Action::PictureFit => {
                 self.visual.fit = self.visual.fit.cycle();
                 self.status = format!("Picture: {}", self.visual.fit.label());
@@ -55,6 +57,18 @@ impl App {
             Action::NextPalette => self.step_theme(true),
             Action::PrevPalette => self.step_theme(false),
         }
+    }
+
+    /// Let the "fit" mode cut off more (or less) of the picture, so that the
+    /// picture itself gets bigger (or smaller).
+    fn zoom_picture(&mut self, by: i16) {
+        let crop = (i16::from(self.visual.crop) + by).clamp(0, 90) as u8;
+        self.visual.crop = crop;
+        self.status = if self.visual.fit == super::visual_view::VisualFit::Fit {
+            format!("Picture: up to {crop}% may be cut off")
+        } else {
+            format!("Picture crop {crop}% (it counts in the fit mode, V)")
+        };
     }
 
     fn toggle_lyrics_mode(&mut self) {

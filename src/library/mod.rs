@@ -28,6 +28,8 @@ pub enum LibraryEvent {
     Tracks(Vec<Track>),
     /// Something went wrong; shown in the status line.
     Error(String),
+    /// Worth telling, but not a failure (files that could not be read).
+    Notice(String),
 }
 
 /// Start the worker. The receiver gets events until the UI drops it.
@@ -79,7 +81,15 @@ fn run(
             return;
         }
         match scan::sync(&mut db, music, &mut bad) {
-            Ok(stats) => tracing::info!(?stats, "library scan finished"),
+            Ok(stats) => {
+                tracing::info!(?stats, "library scan finished");
+                if stats.skipped > 0 {
+                    let _ = tx.send(LibraryEvent::Notice(format!(
+                        "{} file(s) in music/ could not be read (details in data/logs)",
+                        stats.skipped
+                    )));
+                }
+            }
             Err(e) => {
                 tracing::error!("library scan: {e}");
                 let _ = tx.send(LibraryEvent::Error(format!("scan: {e}")));

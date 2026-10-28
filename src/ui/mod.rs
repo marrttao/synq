@@ -14,6 +14,7 @@ mod menu_view;
 mod palette;
 mod palette_view;
 mod player;
+mod spectrum;
 #[cfg(test)]
 mod stage10_tests;
 #[cfg(test)]
@@ -21,6 +22,7 @@ mod stage8_tests;
 mod theme;
 mod tracklist;
 mod visual_view;
+mod viz_view;
 mod whisper_view;
 
 use std::collections::{HashMap, HashSet};
@@ -130,6 +132,8 @@ enum Mode {
         draft: Layout,
         selected: usize,
         drag: Option<layout_view::Drag>,
+        /// The list of removed panels to add back, while it is open.
+        adding: Option<ListState>,
     },
     /// Choosing keys; `capturing` waits for the next key press.
     Settings {
@@ -207,6 +211,7 @@ pub struct App {
     fullscreen: bool,
     palettes: PaletteSet,
     lyrics_backdrop: u8,
+    spectrum: spectrum::Spectrum,
     lyrics_mode: lyrics_view::LyricsMode,
     word_font: bigtext::FontKind,
     keymap: Keymap,
@@ -269,11 +274,13 @@ impl App {
                 visuals,
                 VisualMode::from_config(&config.visuals.mode),
                 VisualFit::from_config(&config.visuals.fit),
+                config.visuals.max_crop,
             ),
             fx: Effects::new(config.ui.animations),
             fullscreen: false,
             palettes: PaletteSet::presets_only(&config.theme.preset),
             lyrics_backdrop: config.ui.lyrics_backdrop.min(100),
+            spectrum: spectrum::Spectrum::default(),
             lyrics_mode: lyrics_view::LyricsMode::from_config(&config.lyrics.display),
             word_font: bigtext::FontKind::from_config(&config.lyrics.word_font),
             keymap: Keymap::defaults(),
@@ -331,6 +338,7 @@ impl App {
             self.sync_lyrics_request();
             self.tick_whisper();
             self.tick_visuals();
+            self.tick_spectrum();
             self.tick_effects();
             terminal.draw(|f| self.draw(f))?;
             next_frame += FRAME;
@@ -368,6 +376,7 @@ impl App {
                         app.tracks = tracks;
                     });
                 }
+                Ok(LibraryEvent::Notice(msg)) => self.status = msg,
                 Ok(LibraryEvent::Error(msg)) => {
                     self.scanning = false;
                     self.status = msg;

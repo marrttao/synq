@@ -42,6 +42,11 @@ impl Player {
         }
     }
 
+    /// The latest samples, for the visualizer.
+    pub fn scope(&self) -> &std::sync::Arc<crate::audio::scope::Scope> {
+        &self.audio.scope
+    }
+
     /// Apply pending audio events; returns the last error message, if any.
     pub fn poll(&mut self) -> Option<String> {
         let mut error = None;

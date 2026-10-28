@@ -124,7 +124,7 @@ pub(super) struct Active {
     delays: Vec<Duration>,
     clock: Clock,
     /// Panel size (cells) the caches below were made for.
-    sized_for: (u16, u16, VisualFit),
+    sized_for: (u16, u16, VisualFit, u8),
     protocols: Vec<Option<StatefulProtocol>>,
     block_grids: Vec<Option<blocks::Grid>>,
     ascii: Vec<Option<Vec<Line<'static>>>>,
@@ -146,11 +146,11 @@ impl Active {
             images,
             delays,
             clock: Clock::default(),
-            sized_for: (0, 0, VisualFit::Fill),
+            sized_for: (0, 0, VisualFit::Fill, 0),
         }
     }
 
-    fn fit_caches(&mut self, size: (u16, u16, VisualFit)) {
+    fn fit_caches(&mut self, size: (u16, u16, VisualFit, u8)) {
         if self.sized_for != size {
             self.sized_for = size;
             self.protocols.iter_mut().for_each(|p| *p = None);
@@ -160,29 +160,56 @@ impl Active {
     }
 }
 
-/// The picture made exactly `w` x `h` pixels, the way `fit` says.
-fn scaled(image: &DynamicImage, w: u32, h: u32, fit: VisualFit) -> DynamicImage {
+/// The picture made exactly `w` x `h` pixels, the way `fit` says. `crop` is
+/// how much of the picture (percent, of the side that overflows) the "fit"
+/// mode may cut off to make the picture bigger; the rest of the panel is
+/// filled with a blurred copy.
+fn scaled(image: &DynamicImage, w: u32, h: u32, fit: VisualFit, crop: u8) -> DynamicImage {
     let (w, h) = (w.max(1), h.max(1));
     let filter = FilterType::CatmullRom;
     match fit {
         VisualFit::Fill => image.resize_to_fill(w, h, filter),
         VisualFit::Stretch => image.resize_exact(w, h, filter),
         VisualFit::Fit => {
-            let small = image.resize(w, h, filter).to_rgba8();
-            if small.width() == w && small.height() == h {
-                return DynamicImage::ImageRgba8(small);
+            let (iw, ih) = (image.width() as f32, image.height() as f32);
+            // The scale at which the whole picture fits, and the one at
+            // which it covers the panel.
+            let whole = (w as f32 / iw).min(h as f32 / ih);
+            let cover = (w as f32 / iw).max(h as f32 / ih);
+            let keep = 1.0 - f32::from(crop.min(90)) / 100.0;
+            let scale = cover.min(whole / keep);
+            // The part of the picture that is on the screen, centered.
+            let (vis_w, vis_h) = ((w as f32 / scale).min(iw), (h as f32 / scale).min(ih));
+            let window = image.crop_imm(
+                ((iw - vis_w) / 2.0) as u32,
+                ((ih - vis_h) / 2.0) as u32,
+                vis_w.round().max(1.0) as u32,
+                vis_h.round().max(1.0) as u32,
+            );
+            let near = |size: f32, limit: u32| {
+                let n = size.round().max(1.0) as u32;
+                // A line of backdrop one pixel wide would only look like a flaw.
+                if limit.saturating_sub(n) <= 1 {
+                    limit
+                } else {
+                    n.min(limit)
+                }
+            };
+            let (out_w, out_h) = (near(vis_w * scale, w), near(vis_h * scale, h));
+            let part = window.resize_exact(out_w, out_h, filter).to_rgba8();
+            if part.width() == w && part.height() == h {
+                return DynamicImage::ImageRgba8(part);
             }
-            // The whole picture in the middle; the free space is filled with
-            // a blurred, darker copy of the same picture, as video players do,
-            // so the panel is used completely and nothing is cut off.
+            // The free space is filled with a blurred, darker copy of the
+            // picture, as video players do.
             let backdrop = image
                 .resize_to_fill((w / 16).max(1), (h / 16).max(1), FilterType::Triangle)
                 .resize_exact(w, h, FilterType::Triangle)
                 .brighten(-45);
             let mut canvas = backdrop.to_rgba8();
-            let x = i64::from((w - small.width().min(w)) / 2);
-            let y = i64::from((h - small.height().min(h)) / 2);
-            image::imageops::overlay(&mut canvas, &small, x, y);
+            let x = i64::from((w - part.width()) / 2);
+            let y = i64::from((h - part.height()) / 2);
+            image::imageops::overlay(&mut canvas, &part, x, y);
             DynamicImage::ImageRgba8(canvas)
         }
     }
@@ -191,9 +218,15 @@ fn scaled(image: &DynamicImage, w: u32, h: u32, fit: VisualFit) -> DynamicImage 
 /// One text line per panel row, `cols` characters wide. The character
 /// follows the brightness (stretched to the picture's own range), its color
 /// is the pixel's and the cell background is a dark shade of it.
-fn ascii_lines(image: &DynamicImage, cols: u16, rows: u16, fit: VisualFit) -> Vec<Line<'static>> {
+fn ascii_lines(
+    image: &DynamicImage,
+    cols: u16,
+    rows: u16,
+    fit: VisualFit,
+    crop: u8,
+) -> Vec<Line<'static>> {
     // A character cell is about twice as tall as it is wide.
-    let img = scaled(image, u32::from(cols), u32::from(rows) * 2, fit).to_rgba8();
+    let img = scaled(image, u32::from(cols), u32::from(rows) * 2, fit, crop).to_rgba8();
     let luma =
         |c: [u8; 3]| (u32::from(c[0]) * 299 + u32::from(c[1]) * 587 + u32::from(c[2]) * 114) / 1000;
     let cell = |col: u32, row: u32| -> ([u8; 3], u32) {
@@ -274,6 +307,8 @@ pub(super) struct VisualState {
     auto: Option<String>,
     pub(super) mode: VisualMode,
     pub(super) fit: VisualFit,
+    /// How much the "fit" mode may cut off to make the picture bigger (percent).
+    pub(super) crop: u8,
 }
 
 /// Stored as the global choice when the user picked "(none)", so that the
@@ -281,10 +316,11 @@ pub(super) struct VisualState {
 const NO_PICTURE: &str = "-";
 
 impl VisualState {
-    pub(super) fn new(handle: visuals::Handle, mode: VisualMode, fit: VisualFit) -> Self {
+    pub(super) fn new(handle: visuals::Handle, mode: VisualMode, fit: VisualFit, crop: u8) -> Self {
         Self {
             mode,
             fit,
+            crop: crop.min(90),
             handle,
             global: None,
             per_playlist: HashMap::new(),
@@ -465,16 +501,16 @@ impl App {
         }
         let graphics = self.visual.handle.picker.protocol_type() != ProtocolType::Halfblocks;
         let mode = self.visual.mode.effective(overlapped, graphics);
-        let fit = self.visual.fit;
+        let (fit, crop) = (self.visual.fit, self.visual.crop);
         if let Some(active) = &mut self.visual.active
             && !active.images.is_empty()
         {
-            active.fit_caches((inner.width, inner.height, fit));
+            active.fit_caches((inner.width, inner.height, fit, crop));
             let index = active.clock.index().min(active.images.len() - 1);
             match mode {
                 VisualMode::Ascii => {
                     let lines = active.ascii[index].get_or_insert_with(|| {
-                        ascii_lines(&active.images[index], inner.width, inner.height, fit)
+                        ascii_lines(&active.images[index], inner.width, inner.height, fit, crop)
                     });
                     f.render_widget(Paragraph::new(lines.clone()), inner);
                 }
@@ -489,6 +525,7 @@ impl App {
                             u32::from(inner.width) * 2,
                             u32::from(inner.height) * 2,
                             fit,
+                            crop,
                         )
                         .to_rgba8();
                         blocks::quadrants(&img, inner.width, inner.height, bg)
@@ -504,6 +541,7 @@ impl App {
                             u32::from(inner.width) * u32::from(font.width),
                             u32::from(inner.height) * u32::from(font.height),
                             fit,
+                            crop,
                         );
                         picker.new_resize_protocol(filled)
                     });
@@ -922,7 +960,7 @@ mod fit_tests {
     fn every_fit_gives_exactly_the_panel_size() {
         for fit in [VisualFit::Fill, VisualFit::Fit, VisualFit::Stretch] {
             for (w, h) in [(100, 100), (10, 80), (300, 20), (1, 1)] {
-                let img = scaled(&wide(), w, h, fit);
+                let img = scaled(&wide(), w, h, fit, 0);
                 assert_eq!((img.width(), img.height()), (w, h), "{fit:?}");
             }
         }
@@ -931,10 +969,10 @@ mod fit_tests {
     #[test]
     fn every_fit_covers_the_whole_panel_and_fit_keeps_the_whole_picture() {
         let opaque = |img: &DynamicImage| img.to_rgba8().pixels().all(|p| p[3] == 255);
-        assert!(opaque(&scaled(&wide(), 60, 60, VisualFit::Fill)));
-        assert!(opaque(&scaled(&wide(), 60, 60, VisualFit::Stretch)));
-        assert!(opaque(&scaled(&wide(), 60, 60, VisualFit::Fit)));
-        let fit = scaled(&wide(), 60, 60, VisualFit::Fit).to_rgba8();
+        assert!(opaque(&scaled(&wide(), 60, 60, VisualFit::Fill, 0)));
+        assert!(opaque(&scaled(&wide(), 60, 60, VisualFit::Stretch, 0)));
+        assert!(opaque(&scaled(&wide(), 60, 60, VisualFit::Fit, 0)));
+        let fit = scaled(&wide(), 60, 60, VisualFit::Fit, 0).to_rgba8();
         // The picture is as wide as the panel, all of it, in the middle...
         assert_eq!(fit.get_pixel(30, 30).0, [200, 10, 10, 255]);
         assert_eq!(fit.get_pixel(0, 30).0, [200, 10, 10, 255]);
@@ -943,8 +981,31 @@ mod fit_tests {
         assert_eq!(band[3], 255);
         assert!(band[0] < 200 && band[0] > 100, "{band:?}");
         // A picture of the panel's own proportions has no bands at all.
-        let exact = scaled(&wide(), 80, 40, VisualFit::Fit).to_rgba8();
+        let exact = scaled(&wide(), 80, 40, VisualFit::Fit, 0).to_rgba8();
         assert_eq!(exact.get_pixel(0, 0).0, [200, 10, 10, 255]);
+    }
+
+    #[test]
+    fn a_crop_allowance_makes_the_picture_bigger_without_empty_edges() {
+        // 40x20 into 60x60: whole picture 60x30; with 40% allowed it is
+        // scaled 1.5 / 0.6 = 2.5 times (100x50), so 24 of 40 columns show.
+        let none = scaled(&wide(), 60, 60, VisualFit::Fit, 0).to_rgba8();
+        let some = scaled(&wide(), 60, 60, VisualFit::Fit, 40).to_rgba8();
+        let height = |img: &image::RgbaImage| {
+            (0..60)
+                .filter(|&y| img.get_pixel(30, y).0 == [200, 10, 10, 255])
+                .count()
+        };
+        assert_eq!(height(&none), 30);
+        assert_eq!(height(&some), 50);
+        // Enough allowance to cover the panel: no backdrop at all.
+        let full = scaled(&wide(), 60, 60, VisualFit::Fit, 90).to_rgba8();
+        assert_eq!(height(&full), 60);
+        // The size is always exactly the panel's.
+        for crop in [0, 25, 40, 90] {
+            let img = scaled(&wide(), 77, 31, VisualFit::Fit, crop);
+            assert_eq!((img.width(), img.height()), (77, 31));
+        }
     }
 
     #[test]

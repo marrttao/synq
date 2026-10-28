@@ -93,6 +93,26 @@ impl Theme {
         }
     }
 
+    /// A color along the palette: the accent, then the extra colors (or the
+    /// text color when there are none); `t` runs from 0 to 1.
+    pub fn gradient(&self, t: f32) -> Color {
+        let mut stops = vec![self.accent];
+        stops.extend(self.extras.iter().take(self.extra_count));
+        if stops.len() == 1 {
+            stops.push(self.foreground);
+        }
+        let at = t.clamp(0.0, 1.0) * (stops.len() - 1) as f32;
+        let i = (at.floor() as usize).min(stops.len() - 1);
+        let j = (i + 1).min(stops.len() - 1);
+        match (stops[i], stops[j]) {
+            (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) => {
+                let c = mix([r1, g1, b1], [r2, g2, b2], ((at - i as f32) * 100.0) as u32);
+                Color::Rgb(c[0], c[1], c[2])
+            }
+            (a, _) => a,
+        }
+    }
+
     /// The i-th color of the rotation: the accent, then the extra colors.
     pub fn rotating(&self, i: usize) -> Color {
         match i % (self.extra_count + 1) {

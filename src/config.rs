@@ -90,6 +90,9 @@ pub struct VisualsConfig {
     pub mode: String,
     /// How the picture fits its panel: "fill", "fit" or "stretch" (key V).
     pub fit: String,
+    /// How much of the picture the "fit" mode may cut off to make it bigger,
+    /// in percent (keys z / Z change it while playing).
+    pub max_crop: u8,
     /// Pause GIF animation together with the music.
     pub pause_with_music: bool,
 }
@@ -151,6 +154,7 @@ impl Default for VisualsConfig {
             protocol: "auto".into(),
             mode: "picture".into(),
             fit: "fit".into(),
+            max_crop: 35,
             pause_with_music: true,
         }
     }
@@ -205,6 +209,8 @@ mode = "picture"
 # How the picture fits its panel: "fit" (whole picture, blurred copy fills the rest),
 # "fill" (crops the edges) or "stretch" (key V).
 fit = "fit"
+# How much of the picture "fit" may cut off to make it bigger, percent (keys z / Z).
+max_crop = 35
 # Pause GIF animation together with the music.
 pause_with_music = true
 "##;

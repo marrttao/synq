@@ -30,6 +30,8 @@ pub enum Action {
     Fullscreen,
     PictureMode,
     PictureFit,
+    PictureZoomIn,
+    PictureZoomOut,
     Refresh,
     NextLayout,
     PrevLayout,
@@ -38,7 +40,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 25] = [
+    pub const ALL: [Action; 27] = [
         Action::PlayPause,
         Action::Next,
         Action::Prev,
@@ -59,6 +61,8 @@ impl Action {
         Action::Fullscreen,
         Action::PictureMode,
         Action::PictureFit,
+        Action::PictureZoomIn,
+        Action::PictureZoomOut,
         Action::NextLayout,
         Action::PrevLayout,
         Action::NextPalette,
@@ -89,6 +93,8 @@ impl Action {
             Action::Fullscreen => "fullscreen",
             Action::PictureMode => "picture_mode",
             Action::PictureFit => "picture_fit",
+            Action::PictureZoomIn => "picture_zoom_in",
+            Action::PictureZoomOut => "picture_zoom_out",
             Action::Refresh => "refresh",
             Action::NextLayout => "next_layout",
             Action::PrevLayout => "prev_layout",
@@ -118,7 +124,9 @@ impl Action {
             Action::LyricsLater => "Lyrics later 0.1 s",
             Action::Fullscreen => "Full screen",
             Action::PictureMode => "Picture / ASCII",
-            Action::PictureFit => "Picture: fill / fit / stretch",
+            Action::PictureFit => "Picture: fit / fill / stretch",
+            Action::PictureZoomIn => "Picture bigger (crop more)",
+            Action::PictureZoomOut => "Picture smaller (crop less)",
             Action::Refresh => "Refresh everything",
             Action::NextLayout => "Next layout",
             Action::PrevLayout => "Previous layout",
@@ -150,6 +158,8 @@ impl Action {
             Action::Fullscreen => plain(KeyCode::Char('f')),
             Action::PictureMode => plain(KeyCode::Char('v')),
             Action::PictureFit => plain(KeyCode::Char('V')),
+            Action::PictureZoomIn => plain(KeyCode::Char('z')),
+            Action::PictureZoomOut => plain(KeyCode::Char('Z')),
             Action::Refresh => plain(KeyCode::F(5)),
             Action::NextLayout => plain(KeyCode::Char('}')),
             Action::PrevLayout => plain(KeyCode::Char('{')),

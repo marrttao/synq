@@ -44,12 +44,13 @@ impl App {
             return;
         }
         self.fx.lyrics_inner.set(Rect::ZERO);
-        let [library, lyrics, visual] = layout.effective(area.width);
+        let [library, lyrics, visual, sound] = layout.effective(area.width);
         // Bottom to top: the picture, the list, the lyrics. Whatever is
         // placed over another panel is drawn over it, like subtitles.
-        let (lib_rect, lyr_rect) = (library.rect(main), lyrics.rect(main));
+        let (lib_rect, lyr_rect, snd_rect) =
+            (library.rect(main), lyrics.rect(main), sound.rect(main));
         if let Some(r) = visual.rect(main) {
-            let overlapped = [lib_rect, lyr_rect]
+            let overlapped = [lib_rect, lyr_rect, snd_rect]
                 .into_iter()
                 .flatten()
                 .any(|o| o.intersects(r));
@@ -57,6 +58,9 @@ impl App {
         }
         if let Some(r) = lib_rect {
             self.draw_browser(f, r);
+        }
+        if let Some(r) = snd_rect {
+            self.draw_visualizer(f, r);
         }
         if let Some(r) = lyr_rect {
             self.draw_lyrics(f, r);

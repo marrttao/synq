@@ -23,15 +23,18 @@ pub enum Module {
     Library,
     Lyrics,
     Visual,
+    /// The sound spectrum.
+    Visualizer,
     /// Fixed bar at the bottom; it can only be shown or hidden.
     Player,
 }
 
 impl Module {
-    pub const ALL: [Module; 4] = [
+    pub const ALL: [Module; 5] = [
         Module::Library,
         Module::Lyrics,
         Module::Visual,
+        Module::Visualizer,
         Module::Player,
     ];
 
@@ -40,6 +43,7 @@ impl Module {
             Module::Library => "Library",
             Module::Lyrics => "Lyrics",
             Module::Visual => "Visual",
+            Module::Visualizer => "Sound",
             Module::Player => "Player bar",
         }
     }
@@ -112,13 +116,13 @@ pub struct Layout {
     pub custom: bool,
     /// The classic arrangement folds panels away in narrow windows.
     pub responsive: bool,
-    /// Library, Lyrics, Visual.
-    pub places: [Place; 3],
+    /// Library, Lyrics, Visual, Sound (the spectrum).
+    pub places: [Place; 4],
     pub player: bool,
 }
 
 impl Layout {
-    fn preset(name: &str, responsive: bool, places: [Place; 3]) -> Self {
+    fn preset(name: &str, responsive: bool, places: [Place; 4]) -> Self {
         Self {
             name: name.to_owned(),
             custom: false,
@@ -137,21 +141,25 @@ impl Layout {
     }
 
     /// Places for a window `width` columns wide.
-    pub fn effective(&self, width: u16) -> [Place; 3] {
+    pub fn effective(&self, width: u16) -> [Place; 4] {
         if !self.responsive {
             return self.places;
         }
-        let [mut lib, mut lyr, mut vis] = self.places;
+        let [mut lib, mut lyr, mut vis, mut viz] = self.places;
+        // The spectrum sits in the same column as the lyrics.
         if width < 110 {
             vis.visible = false;
             lyr.w += vis.w;
+            viz.w = lyr.w;
         }
         if width < 70 {
             lib.visible = false;
             lyr.x = lib.x;
             lyr.w += lib.w;
+            viz.x = lyr.x;
+            viz.w = lyr.w;
         }
-        [lib, lyr, vis]
+        [lib, lyr, vis, viz]
     }
 
     /// A fixed copy of what is on screen now, ready for editing.
@@ -175,24 +183,25 @@ impl Layout {
             )
         };
         format!(
-            "v1;player={};{};{};{}",
+            "v1;player={};{};{};{};{}",
             u8::from(self.player),
             p("lib", &self.places[0]),
             p("lyr", &self.places[1]),
             p("vis", &self.places[2]),
+            p("viz", &self.places[3]),
         )
     }
 
     pub fn parse(name: &str, text: &str) -> Option<Self> {
         let mut player = true;
-        let mut places = [None; 3];
+        let mut places = [None; 4];
         for part in text.split(';') {
             let Some((key, value)) = part.split_once('=') else {
                 continue; // the version tag
             };
             match key {
                 "player" => player = value == "1",
-                "lib" | "lyr" | "vis" => {
+                "lib" | "lyr" | "vis" | "viz" => {
                     let n: Vec<u8> = value
                         .split(',')
                         .map(|v| v.trim().parse().ok())
@@ -205,20 +214,24 @@ impl Layout {
                     {
                         return None;
                     }
-                    let slot = ["lib", "lyr", "vis"].iter().position(|k| *k == key)?;
+                    let slot = ["lib", "lyr", "vis", "viz"]
+                        .iter()
+                        .position(|k| *k == key)?;
                     places[slot] = Some(place(v == 1, x, y, w, h));
                 }
                 _ => {}
             }
         }
-        let [Some(a), Some(b), Some(c)] = places else {
+        // Layouts saved before the spectrum existed do not show it.
+        let viz = places[3].unwrap_or(place(false, 0, 78, 100, 22));
+        let [Some(a), Some(b), Some(c), _] = places else {
             return None;
         };
         Some(Self {
             name: name.to_owned(),
             custom: true,
             responsive: false,
-            places: [a, b, c],
+            places: [a, b, c, viz],
             player,
         })
     }
@@ -232,8 +245,9 @@ pub(super) fn presets() -> Vec<Layout> {
             true,
             [
                 place(true, 0, 0, 34, 100),
-                place(true, 34, 0, 42, 100),
+                place(true, 34, 0, 42, 78),
                 place(true, 76, 0, 24, 100),
+                place(true, 34, 78, 42, 22),
             ],
         ),
         // Words and a big picture; no list.
@@ -242,8 +256,9 @@ pub(super) fn presets() -> Vec<Layout> {
             false,
             [
                 place(false, 0, 0, 25, 100),
-                place(true, 0, 0, 60, 100),
+                place(true, 0, 0, 60, 78),
                 place(true, 60, 0, 40, 100),
+                place(true, 0, 78, 60, 22),
             ],
         ),
         // The picture on top, lyrics under it.
@@ -252,8 +267,9 @@ pub(super) fn presets() -> Vec<Layout> {
             false,
             [
                 place(false, 0, 0, 25, 100),
-                place(true, 0, 62, 100, 38),
+                place(true, 0, 62, 62, 38),
                 place(true, 0, 0, 100, 62),
+                place(true, 62, 62, 38, 38),
             ],
         ),
     ]
@@ -401,7 +417,7 @@ mod tests {
         for width in [110, 111, 120, 157, 300] {
             let area = Rect { width, ..AREA };
             let l = &presets()[0];
-            let [a, b, c] = l.effective(width).map(|p| p.raw_rect(area));
+            let [a, b, c, _] = l.effective(width).map(|p| p.raw_rect(area));
             assert_eq!(a.x + a.width, b.x, "{width}");
             assert_eq!(b.x + b.width, c.x, "{width}");
             assert_eq!(c.x + c.width, width, "{width}");
@@ -412,13 +428,26 @@ mod tests {
     fn classic_folds_panels_away_in_narrow_windows() {
         let l = &presets()[0];
         let vis = |w| l.effective(w).map(|p| p.visible);
-        assert_eq!(vis(120), [true, true, true]);
-        assert_eq!(vis(90), [true, true, false]);
-        assert_eq!(vis(50), [false, true, false]);
-        let [_, lyr, _] = l.effective(50);
+        assert_eq!(vis(120), [true, true, true, true]);
+        assert_eq!(vis(90), [true, true, false, true]);
+        assert_eq!(vis(50), [false, true, false, true]);
+        let [_, lyr, _, viz] = l.effective(50);
         assert_eq!((lyr.x, lyr.w), (0, 100));
+        assert_eq!(
+            (viz.x, viz.w),
+            (0, 100),
+            "the spectrum stays under the lyrics"
+        );
         // The others do not move by themselves.
         assert_eq!(presets()[1].effective(50), presets()[1].places);
+    }
+
+    #[test]
+    fn old_saved_layouts_load_without_the_spectrum() {
+        let old = "v1;player=1;lib=1,0,0,34,100;lyr=1,34,0,42,100;vis=1,76,0,24,100";
+        let l = Layout::parse("Old", old).unwrap();
+        assert!(!l.places[3].visible, "it was not there, so it stays off");
+        assert_eq!(Layout::parse("Old", &l.to_text()).unwrap().places, l.places);
     }
 
     #[test]
