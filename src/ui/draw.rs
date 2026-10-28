@@ -255,8 +255,12 @@ impl App {
         };
         let shuffle = if self.player.shuffle { "on" } else { "off" };
         let scanning = if self.scanning { " | scanning..." } else { "" };
+        let whisper = self
+            .whisper_text()
+            .map(|t| format!(" | whisper: {t}"))
+            .unwrap_or_default();
         let text = format!(
-            "vol {}% | shuffle {shuffle} | repeat {repeat} | {} tracks{scanning} | {}",
+            "vol {}% | shuffle {shuffle} | repeat {repeat} | {} tracks{scanning}{whisper} | {}",
             (self.player.volume * 100.0).round() as u32,
             self.tracks.len(),
             self.status
@@ -297,6 +301,22 @@ impl App {
                     ),
                 ];
                 let block = popup_block(&self.theme, "Delete");
+                f.render_widget(Paragraph::new(text).block(block), area);
+            }
+            Mode::ConfirmModel { model, size_mb } => {
+                let area = centered(screen, 64, 6);
+                f.render_widget(Clear, area);
+                let dim = Style::new().fg(self.theme.dim);
+                let text = vec![
+                    Line::from("No lyrics found. Recognize them with Whisper?"),
+                    Line::from(format!(
+                        "This downloads the \"{model}\" model (about {}) from",
+                        super::whisper_view::format_size(*size_mb)
+                    )),
+                    Line::from("Hugging Face into data/models/ (only once)."),
+                    Line::styled("y / Enter: download   n / Esc: not now", dim),
+                ];
+                let block = popup_block(&self.theme, "Whisper model");
                 f.render_widget(Paragraph::new(text).block(block), area);
             }
             Mode::Pick { state, .. } => {

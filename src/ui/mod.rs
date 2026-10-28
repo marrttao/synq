@@ -6,6 +6,7 @@ mod lyrics_view;
 mod player;
 mod theme;
 mod tracklist;
+mod whisper_view;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -22,9 +23,11 @@ use crate::db::Track;
 use crate::library::LibraryEvent;
 use crate::lyrics;
 use crate::playlists::{self, PlaylistInfo, Target};
+use crate::transcribe;
 use lyrics_view::LyricsState;
 use player::Player;
 use theme::Theme;
+use whisper_view::WhisperStatus;
 
 /// ~30 frames per second.
 const FRAME: Duration = Duration::from_millis(33);
@@ -68,6 +71,11 @@ enum Mode {
         id: i64,
         name: String,
     },
+    /// Asking whether the Whisper model may be downloaded.
+    ConfirmModel {
+        model: String,
+        size_mb: u64,
+    },
     /// Choosing the playlist for a track.
     Pick {
         track_id: i64,
@@ -96,6 +104,15 @@ pub struct App {
     player: Player,
     music_dir: PathBuf,
     lyrics: lyrics::Handle,
+    transcribe: transcribe::Handle,
+    whisper_enabled: bool,
+    whisper: WhisperStatus,
+    /// Track to recognize automatically once it has been playing a moment.
+    auto_pending: Option<(i64, Instant)>,
+    /// Tracks recognition was already started for in this session.
+    attempted: HashSet<i64>,
+    /// A download question waiting for the current dialog to close.
+    model_question: Option<(String, u64)>,
     lyrics_state: LyricsState,
     /// Track the current lyrics (or lookup) belong to.
     lyrics_for: Option<i64>,
@@ -109,6 +126,7 @@ impl App {
         library_rx: Receiver<LibraryEvent>,
         playlists: playlists::Handle,
         lyrics: lyrics::Handle,
+        transcribe: transcribe::Handle,
         music_dir: PathBuf,
     ) -> Self {
         Self {
@@ -131,6 +149,12 @@ impl App {
             player: Player::new(&config.audio, music_dir.clone()),
             music_dir,
             lyrics,
+            whisper_enabled: config.whisper.enabled && transcribe::AVAILABLE,
+            transcribe,
+            whisper: WhisperStatus::Idle,
+            auto_pending: None,
+            attempted: HashSet::new(),
+            model_question: None,
             lyrics_state: LyricsState::Idle,
             lyrics_for: None,
             show_lyrics: true,
@@ -143,10 +167,12 @@ impl App {
             self.drain_library_events();
             self.drain_playlist_events();
             self.drain_lyrics_events();
+            self.drain_transcribe_events();
             if let Some(err) = self.player.poll() {
                 self.status = err;
             }
             self.sync_lyrics_request();
+            self.tick_whisper();
             terminal.draw(|f| self.draw(f))?;
             next_frame += FRAME;
             // Wait for input until the next frame is due; keeps ~30 fps
@@ -351,6 +377,7 @@ impl App {
             Mode::Prompt { .. } => self.key_prompt(key),
             Mode::Confirm { .. } => self.key_confirm(key),
             Mode::Pick { .. } => self.key_pick(key),
+            Mode::ConfirmModel { .. } => self.key_confirm_model(key),
         }
     }
 
@@ -390,7 +417,7 @@ impl App {
             KeyCode::Char('r') => self.player.cycle_repeat(),
             KeyCode::Char('f') => self.toggle_favorite(),
             KeyCode::Char('l') => self.show_lyrics = !self.show_lyrics,
-            KeyCode::Char('t') => self.retry_lyrics(),
+            KeyCode::Char('t') => self.recognize_or_retry(),
             KeyCode::Char('[') => self.shift_lyrics(false),
             KeyCode::Char(']') => self.shift_lyrics(true),
             KeyCode::Char('a') => self.start_pick(),
@@ -692,11 +719,12 @@ mod tests {
 
         let (lib_tx, lib_rx) = mpsc::channel();
         let mut app = App::new(
-            &Config::default(),
+            &test_config(),
             None,
             lib_rx,
             playlists::spawn(&paths),
             lyrics::spawn(paths.db.clone(), paths.lyrics.clone(), false),
+            transcribe::spawn(&test_config().whisper, &paths),
             paths.music.clone(),
         );
         lib_tx
@@ -830,11 +858,12 @@ mod lyrics_tests {
 
         let (lib_tx, lib_rx) = mpsc::channel();
         let mut app = App::new(
-            &Config::default(),
+            &test_config(),
             None,
             lib_rx,
             playlists::spawn(&paths),
             lyrics::spawn(paths.db.clone(), paths.lyrics.clone(), false),
+            transcribe::spawn(&test_config().whisper, &paths),
             paths.music.clone(),
         );
         lib_tx
@@ -902,5 +931,153 @@ mod lyrics_tests {
         app.player.now_id = None;
         app.sync_lyrics_request();
         assert!(matches!(app.lyrics_state, LyricsState::Idle));
+    }
+}
+
+/// Config for tests: no automatic speech recognition in the background.
+#[cfg(test)]
+fn test_config() -> Config {
+    let mut config = Config::default();
+    config.whisper.enabled = false;
+    config
+}
+
+#[cfg(all(test, feature = "whisper"))]
+mod whisper_tests {
+    use super::*;
+    use crate::db::{Db, TrackRecord};
+    use crate::paths::Paths;
+    use crate::testutil::wav_bytes;
+    use std::sync::mpsc;
+
+    fn key(app: &mut App, code: KeyCode) {
+        app.handle_event(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)));
+    }
+
+    fn wait(app: &mut App, what: &str, cond: impl Fn(&App) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            app.drain_library_events();
+            app.drain_lyrics_events();
+            app.drain_transcribe_events();
+            app.sync_lyrics_request();
+            app.tick_whisper();
+            if cond(app) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("timed out waiting for: {what}");
+    }
+
+    fn render(app: &mut App) {
+        for (w, h) in [(120, 30), (60, 10)] {
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(w, h)).unwrap();
+            terminal.draw(|f| app.draw(f)).unwrap();
+        }
+    }
+
+    #[test]
+    fn missing_model_is_only_downloaded_after_asking() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::new(tmp.path().to_path_buf());
+        paths.ensure_dirs().unwrap();
+        let db = Db::open(&paths.db).unwrap();
+        std::fs::write(paths.music.join("a.wav"), wav_bytes(100)).unwrap();
+        db.upsert_track(&TrackRecord {
+            path: "a.wav".into(),
+            size: 1,
+            mtime_ms: 1,
+            title: "A".into(),
+            artist: "Band".into(),
+            album: String::new(),
+            duration_ms: 100,
+        })
+        .unwrap();
+
+        let mut config = Config::default();
+        config.whisper.enabled = true;
+        config.whisper.model = "tiny".into();
+        config.lyrics.online = false;
+        let (lib_tx, lib_rx) = mpsc::channel();
+        let mut app = App::new(
+            &config,
+            None,
+            lib_rx,
+            playlists::spawn(&paths),
+            lyrics::spawn(paths.db.clone(), paths.lyrics.clone(), false),
+            transcribe::spawn(&config.whisper, &paths),
+            paths.music.clone(),
+        );
+        lib_tx
+            .send(LibraryEvent::Tracks(db.tracks().unwrap()))
+            .unwrap();
+        wait(&mut app, "tracks", |a| a.tracks.len() == 1);
+
+        // "Play" a track that has no lyrics anywhere.
+        app.player.now_id = Some(app.tracks[0].id);
+        wait(&mut app, "not found", |a| {
+            matches!(a.lyrics_state, LyricsState::NotFound { .. })
+        });
+        assert!(
+            app.auto_pending.is_some(),
+            "automatic recognition scheduled"
+        );
+        render(&mut app);
+
+        // The user asks for recognition: the model is missing, so ask first.
+        key(&mut app, KeyCode::Char('t'));
+        wait(&mut app, "download question", |a| {
+            matches!(a.mode, Mode::ConfirmModel { .. })
+        });
+        match &app.mode {
+            Mode::ConfirmModel { model, size_mb } => {
+                assert_eq!((model.as_str(), *size_mb), ("tiny", 75));
+            }
+            _ => unreachable!(),
+        }
+        render(&mut app); // popup
+
+        // "No": nothing is downloaded, the user is told how to retry.
+        key(&mut app, KeyCode::Char('n'));
+        assert!(matches!(app.mode, Mode::Normal));
+        wait(&mut app, "decline message", |a| {
+            a.status.contains("declined")
+        });
+        assert!(!paths.models.join("ggml-tiny.bin").exists());
+        assert!(std::fs::read_dir(&paths.models).unwrap().next().is_none());
+
+        // Pressing t again asks again.
+        key(&mut app, KeyCode::Char('t'));
+        wait(&mut app, "second question", |a| {
+            matches!(a.mode, Mode::ConfirmModel { .. })
+        });
+        key(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn disabled_whisper_never_asks_and_t_searches_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::new(tmp.path().to_path_buf());
+        paths.ensure_dirs().unwrap();
+        let mut config = Config::default();
+        config.whisper.enabled = false;
+        let (_lib_tx, lib_rx) = mpsc::channel();
+        let mut app = App::new(
+            &config,
+            None,
+            lib_rx,
+            playlists::spawn(&paths),
+            lyrics::spawn(paths.db.clone(), paths.lyrics.clone(), false),
+            transcribe::spawn(&config.whisper, &paths),
+            paths.music.clone(),
+        );
+        key(&mut app, KeyCode::Char('t'));
+        app.tick_whisper();
+        assert!(matches!(app.mode, Mode::Normal));
+        assert!(app.auto_pending.is_none());
+        assert!(app.status.contains("disabled") || app.status.contains("Nothing"));
     }
 }

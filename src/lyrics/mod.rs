@@ -18,7 +18,8 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
-use cache::{Cache, Cached};
+pub use cache::Cache;
+use cache::Cached;
 pub use lrc::Lyrics;
 
 use crate::db::Db;
@@ -79,6 +80,8 @@ pub enum Event {
         offset_ms: i64,
     },
     NotFound {
+        /// Speech recognition already tried and found nothing.
+        no_speech: bool,
         track_id: i64,
         /// Set when the lookup failed (e.g. offline) instead of finding nothing.
         problem: Option<String>,
@@ -133,8 +136,14 @@ pub fn spawn(db_path: PathBuf, cache_dir: PathBuf, online: bool) -> Handle {
                         offset_ms,
                     },
                     Resolved::NotFound(problem) => Event::NotFound {
+                        no_speech: false,
                         track_id: req.track_id,
                         problem,
+                    },
+                    Resolved::NoSpeech => Event::NotFound {
+                        no_speech: true,
+                        track_id: req.track_id,
+                        problem: None,
                     },
                 };
                 if ev_tx.send(event).is_err() {
@@ -175,6 +184,8 @@ pub enum Resolved {
     Found(Lyrics, Source),
     /// Nothing found; `Some` explains a failed lookup (not cached).
     NotFound(Option<String>),
+    /// Speech recognition ran before and found no vocals.
+    NoSpeech,
 }
 
 pub struct Resolver {
@@ -208,6 +219,7 @@ impl Resolver {
                     }
                 }
                 Some(Cached::NotFound) => return Resolved::NotFound(None),
+                Some(Cached::NoSpeech) => return Resolved::NoSpeech,
                 None => {}
             }
         }
@@ -289,8 +301,8 @@ impl Resolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::serve_once;
     use crate::testutil::wav_bytes;
-    use lrclib::serve_once;
     use std::fs;
 
     struct Env {

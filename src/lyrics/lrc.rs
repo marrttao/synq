@@ -208,6 +208,35 @@ fn parse_words(body: &str, line_time: u64) -> (String, Vec<Word>, Option<u64>) {
     (text.trim().to_owned(), words, end_ms)
 }
 
+/// `mm:ss.xx` (centiseconds, rounded); minutes may exceed 59.
+#[cfg_attr(not(feature = "whisper"), allow(dead_code))]
+fn format_time(ms: u64) -> String {
+    let cs = (ms + 5) / 10;
+    format!("{:02}:{:02}.{:02}", cs / 6000, cs / 100 % 60, cs % 100)
+}
+
+#[cfg_attr(not(feature = "whisper"), allow(dead_code))]
+/// Write synchronized lyrics as LRC; lines with word timings become
+/// enhanced LRC (`[mm:ss.xx]<mm:ss.xx>word <mm:ss.xx>word <mm:ss.xx>`).
+pub fn format_lrc(lines: &[Line]) -> String {
+    let mut out = String::new();
+    for line in lines {
+        out.push_str(&format!("[{}]", format_time(line.time_ms)));
+        if line.words.is_empty() {
+            out.push_str(&line.text);
+        } else {
+            for w in &line.words {
+                out.push_str(&format!("<{}>{}", format_time(w.time_ms), w.text));
+            }
+            if let Some(end) = line.end_ms {
+                out.push_str(&format!("<{}>", format_time(end)));
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
 /// Index of the line being sung at `pos_ms` (the last line that has
 /// started), with `offset_ms` > 0 delaying the lyrics.
 pub fn current_line(lines: &[Line], pos_ms: u64, offset_ms: i64) -> Option<usize> {
@@ -364,6 +393,24 @@ mod tests {
         assert_eq!(l[0].time_ms, 1_500);
         assert_eq!(l[0].words[1].time_ms, 2_500);
         assert_eq!(l[0].end_ms, Some(3_500));
+    }
+
+    #[test]
+    fn time_formatting_rounds_to_centiseconds() {
+        assert_eq!(format_time(0), "00:00.00");
+        assert_eq!(format_time(12_345), "00:12.35");
+        assert_eq!(format_time(59_999), "01:00.00");
+        assert_eq!(format_time(6_000_000), "100:00.00");
+    }
+
+    #[test]
+    fn format_and_parse_round_trip() {
+        let text = "[00:12.00]<00:12.00>Hello <00:12.50>big <00:13.00>world <00:13.60>\n\
+                    [00:20.00]Plain line\n\
+                    [00:25.50]\n";
+        let lines = synced(text);
+        assert_eq!(format_lrc(&lines), text);
+        assert_eq!(synced(&format_lrc(&lines)), lines);
     }
 
     #[test]

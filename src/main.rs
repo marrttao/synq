@@ -7,6 +7,7 @@ mod paths;
 mod playlists;
 #[cfg(test)]
 mod testutil;
+mod transcribe;
 mod ui;
 
 use anyhow::{Context, Result};
@@ -43,12 +44,14 @@ fn main() -> Result<()> {
     let library_rx = library::spawn(paths.music.clone(), paths.db.clone());
     let playlists = playlists::spawn(&paths);
     let lyrics = lyrics::spawn(paths.db.clone(), paths.lyrics.clone(), config.lyrics.online);
+    let transcribe = transcribe::spawn(&config.whisper, &paths);
     let result = ui::App::new(
         &config,
         status,
         library_rx,
         playlists,
         lyrics,
+        transcribe,
         paths.music.clone(),
     )
     .run(&mut terminal);

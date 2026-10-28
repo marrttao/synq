@@ -94,45 +94,10 @@ pub fn parse_response(body: &str) -> Result<Option<Fetched>, LrclibError> {
 }
 
 #[cfg(test)]
-use std::io::{Read, Write};
-#[cfg(test)]
-use std::net::TcpListener;
-#[cfg(test)]
-use std::thread;
-
-#[cfg(test)]
-/// Serve one canned HTTP response; returns (base url, join handle with
-/// the raw request text).
-pub(crate) fn serve_once(
-    status_line: &'static str,
-    body: &'static str,
-) -> (String, thread::JoinHandle<String>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    let handle = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut request = Vec::new();
-        let mut buf = [0u8; 1024];
-        while !request.windows(4).any(|w| w == b"\r\n\r\n") {
-            let n = stream.read(&mut buf).unwrap();
-            if n == 0 {
-                break;
-            }
-            request.extend_from_slice(&buf[..n]);
-        }
-        let response = format!(
-            "HTTP/1.1 {status_line}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        stream.write_all(response.as_bytes()).unwrap();
-        String::from_utf8_lossy(&request).into_owned()
-    });
-    (url, handle)
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::serve_once;
+    use std::net::TcpListener;
 
     fn query() -> Query<'static> {
         Query {

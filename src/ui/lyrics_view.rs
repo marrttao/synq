@@ -52,7 +52,7 @@ impl App {
     }
 
     /// Send a lookup for track `id`; false if the track is unknown.
-    fn request_lyrics(&mut self, id: i64, retry: bool) -> bool {
+    pub(super) fn request_lyrics(&mut self, id: i64, retry: bool) -> bool {
         let Some(&index) = self.track_index.get(&id) else {
             return false;
         };
@@ -90,12 +90,18 @@ impl App {
                     };
                 }
                 lyrics::Event::NotFound {
-                    track_id, problem, ..
+                    track_id,
+                    problem,
+                    no_speech,
                 } if Some(track_id) == self.lyrics_for => {
                     if let Some(p) = &problem {
                         self.status = format!("Lyrics lookup failed: {p}");
                     }
                     self.lyrics_state = LyricsState::NotFound { problem };
+                    // Nothing anywhere: let Whisper try (unless it already did).
+                    if !no_speech {
+                        self.schedule_auto_transcription(track_id);
+                    }
                 }
                 // Answer for a track that is no longer playing.
                 _ => {}
@@ -206,11 +212,23 @@ impl App {
                 f.render_widget(message("Looking for lyrics..."), middle);
             }
             LyricsState::NotFound { problem } => {
-                let mut lines = vec![Line::styled("No lyrics found", dim)];
-                if let Some(p) = problem {
-                    lines.push(Line::styled(format!("({p})"), dim));
+                let mut lines = Vec::new();
+                if let Some(text) = self.whisper_panel_text() {
+                    lines.push(Line::styled(text, dim));
+                } else {
+                    lines.push(Line::styled("No lyrics found", dim));
+                    if let Some(p) = problem {
+                        lines.push(Line::styled(format!("({p})"), dim));
+                    }
+                    lines.push(Line::styled(
+                        if self.whisper_enabled {
+                            "Press t to recognize them with Whisper"
+                        } else {
+                            "Press t to search again"
+                        },
+                        dim,
+                    ));
                 }
-                lines.push(Line::styled("Press t to search again", dim));
                 let area = Rect {
                     y: inner.y + inner.height.saturating_sub(lines.len() as u16) / 2,
                     height: (lines.len() as u16).min(inner.height),

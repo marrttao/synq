@@ -4,6 +4,7 @@
 //! - `<name>.lrc`  synchronized lyrics (maybe enhanced)
 //! - `<name>.txt`  plain lyrics
 //! - `<name>.none` a lookup that found nothing (so it is not repeated)
+//! - `<name>.nospeech` speech recognition found no vocals
 
 use std::fs;
 use std::io;
@@ -14,13 +15,15 @@ pub enum Cached {
     Synced(String),
     Plain(String),
     NotFound,
+    /// Speech recognition ran and found nothing to transcribe.
+    NoSpeech,
 }
 
 pub struct Cache {
     dir: PathBuf,
 }
 
-const EXTENSIONS: [&str; 3] = ["lrc", "txt", "none"];
+const EXTENSIONS: [&str; 4] = ["lrc", "txt", "none", "nospeech"];
 
 impl Cache {
     pub fn new(dir: PathBuf) -> Self {
@@ -34,6 +37,8 @@ impl Cache {
             Some(Cached::Synced(text))
         } else if let Some(text) = read("txt") {
             Some(Cached::Plain(text))
+        } else if base.with_extension("nospeech").is_file() {
+            Some(Cached::NoSpeech)
         } else if base.with_extension("none").is_file() {
             Some(Cached::NotFound)
         } else {
@@ -51,6 +56,11 @@ impl Cache {
 
     pub fn write_not_found(&self, rel_path: &str) -> io::Result<()> {
         self.write(rel_path, "none", "")
+    }
+
+    #[cfg_attr(not(feature = "whisper"), allow(dead_code))]
+    pub fn write_no_speech(&self, rel_path: &str) -> io::Result<()> {
+        self.write(rel_path, "nospeech", "")
     }
 
     /// Drop every cached result for the track (used by "retry").
