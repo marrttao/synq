@@ -40,6 +40,10 @@ impl App {
             Action::LyricsLater => self.shift_lyrics(true),
             Action::Fullscreen => self.toggle_fullscreen(),
             Action::PictureMode => self.toggle_picture_mode(),
+            Action::PictureFit => {
+                self.visual.fit = self.visual.fit.cycle();
+                self.status = format!("Picture: {}", self.visual.fit.label());
+            }
             Action::Refresh => self.refresh(),
             Action::NextLayout => self.step_layout(true),
             Action::PrevLayout => self.step_layout(false),

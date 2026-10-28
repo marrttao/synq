@@ -45,14 +45,16 @@ impl App {
         }
         self.fx.lyrics_inner.set(Rect::ZERO);
         let [library, lyrics, visual] = layout.effective(area.width);
+        // Bottom to top: the picture, the list, the lyrics. Whatever is
+        // placed over another panel is drawn over it, like subtitles.
+        if let Some(r) = visual.rect(main) {
+            self.draw_visual(f, r);
+        }
         if let Some(r) = library.rect(main) {
             self.draw_browser(f, r);
         }
         if let Some(r) = lyrics.rect(main) {
             self.draw_lyrics(f, r);
-        }
-        if let Some(r) = visual.rect(main) {
-            self.draw_visual(f, r);
         }
         if layout.player {
             self.draw_player_bar(f, bottom);

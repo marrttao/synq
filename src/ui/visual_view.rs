@@ -33,6 +33,43 @@ pub(super) enum VisualMode {
     Ascii,
 }
 
+/// How the picture is fitted to its panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum VisualFit {
+    /// Covers the whole panel; what does not fit its proportions is cut off.
+    Fill,
+    /// The whole picture, with its proportions; empty bands where it is short.
+    Fit,
+    /// The whole picture stretched over the whole panel.
+    Stretch,
+}
+
+impl VisualFit {
+    pub(super) fn from_config(name: &str) -> Self {
+        match name.trim().to_lowercase().as_str() {
+            "fit" => Self::Fit,
+            "stretch" => Self::Stretch,
+            _ => Self::Fill,
+        }
+    }
+
+    pub(super) fn cycle(self) -> Self {
+        match self {
+            Self::Fill => Self::Fit,
+            Self::Fit => Self::Stretch,
+            Self::Stretch => Self::Fill,
+        }
+    }
+
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Fill => "fill (cropped)",
+            Self::Fit => "fit (whole picture)",
+            Self::Stretch => "stretch",
+        }
+    }
+}
+
 impl VisualMode {
     pub(super) fn from_config(name: &str) -> Self {
         if name.trim().eq_ignore_ascii_case("ascii") {
@@ -53,7 +90,7 @@ pub(super) struct Active {
     delays: Vec<Duration>,
     clock: Clock,
     /// Panel size (cells) the caches below were made for.
-    sized_for: (u16, u16),
+    sized_for: (u16, u16, VisualFit),
     protocols: Vec<Option<StatefulProtocol>>,
     ascii: Vec<Option<Vec<Line<'static>>>>,
 }
@@ -73,11 +110,11 @@ impl Active {
             images,
             delays,
             clock: Clock::default(),
-            sized_for: (0, 0),
+            sized_for: (0, 0, VisualFit::Fill),
         }
     }
 
-    fn fit_caches(&mut self, size: (u16, u16)) {
+    fn fit_caches(&mut self, size: (u16, u16, VisualFit)) {
         if self.sized_for != size {
             self.sized_for = size;
             self.protocols.iter_mut().for_each(|p| *p = None);
@@ -86,16 +123,29 @@ impl Active {
     }
 }
 
-/// The picture scaled to cover `w` x `h` pixels completely; what does not
-/// fit the panel's proportions is cut off at the edges.
-fn cover(image: &DynamicImage, w: u32, h: u32) -> DynamicImage {
-    image.resize_to_fill(w.max(1), h.max(1), FilterType::Triangle)
+/// The picture made exactly `w` x `h` pixels, the way `fit` says.
+fn scaled(image: &DynamicImage, w: u32, h: u32, fit: VisualFit) -> DynamicImage {
+    let (w, h) = (w.max(1), h.max(1));
+    let filter = FilterType::CatmullRom;
+    match fit {
+        VisualFit::Fill => image.resize_to_fill(w, h, filter),
+        VisualFit::Stretch => image.resize_exact(w, h, filter),
+        VisualFit::Fit => {
+            let small = image.resize(w, h, filter).to_rgba8();
+            // Transparent bands: the terminal background shows through.
+            let mut canvas = image::RgbaImage::new(w, h);
+            let x = i64::from((w - small.width().min(w)) / 2);
+            let y = i64::from((h - small.height().min(h)) / 2);
+            image::imageops::overlay(&mut canvas, &small, x, y);
+            DynamicImage::ImageRgba8(canvas)
+        }
+    }
 }
 
 /// One text line per panel row, `cols` characters wide.
-fn ascii_lines(image: &DynamicImage, cols: u16, rows: u16) -> Vec<Line<'static>> {
+fn ascii_lines(image: &DynamicImage, cols: u16, rows: u16, fit: VisualFit) -> Vec<Line<'static>> {
     // A character cell is about twice as tall as it is wide.
-    let img = cover(image, u32::from(cols), u32::from(rows) * 2).to_rgba8();
+    let img = scaled(image, u32::from(cols), u32::from(rows) * 2, fit).to_rgba8();
     (0..u32::from(rows))
         .map(|row| {
             let spans: Vec<Span<'static>> = (0..u32::from(cols))
@@ -148,6 +198,7 @@ pub(super) struct VisualState {
     /// First picture in `gifs/`: shown while nothing was chosen at all.
     auto: Option<String>,
     pub(super) mode: VisualMode,
+    pub(super) fit: VisualFit,
 }
 
 /// Stored as the global choice when the user picked "(none)", so that the
@@ -155,9 +206,10 @@ pub(super) struct VisualState {
 const NO_PICTURE: &str = "-";
 
 impl VisualState {
-    pub(super) fn new(handle: visuals::Handle, mode: VisualMode) -> Self {
+    pub(super) fn new(handle: visuals::Handle, mode: VisualMode, fit: VisualFit) -> Self {
         Self {
             mode,
+            fit,
             handle,
             global: None,
             per_playlist: HashMap::new(),
@@ -335,16 +387,16 @@ impl App {
         if inner.width == 0 || inner.height == 0 {
             return;
         }
-        let mode = self.visual.mode;
+        let (mode, fit) = (self.visual.mode, self.visual.fit);
         if let Some(active) = &mut self.visual.active
             && !active.images.is_empty()
         {
-            active.fit_caches((inner.width, inner.height));
+            active.fit_caches((inner.width, inner.height, fit));
             let index = active.clock.index().min(active.images.len() - 1);
             match mode {
                 VisualMode::Ascii => {
                     let lines = active.ascii[index].get_or_insert_with(|| {
-                        ascii_lines(&active.images[index], inner.width, inner.height)
+                        ascii_lines(&active.images[index], inner.width, inner.height, fit)
                     });
                     f.render_widget(Paragraph::new(lines.clone()), inner);
                 }
@@ -352,10 +404,11 @@ impl App {
                     let picker = &self.visual.handle.picker;
                     let proto = active.protocols[index].get_or_insert_with(|| {
                         let font = picker.font_size();
-                        let filled = cover(
+                        let filled = scaled(
                             &active.images[index],
                             u32::from(inner.width) * u32::from(font.width),
                             u32::from(inner.height) * u32::from(font.height),
+                            fit,
                         );
                         picker.new_resize_protocol(filled)
                     });
@@ -753,5 +806,48 @@ mod tests {
         assert!(!*to_playlist);
         key(&mut app, KeyCode::Esc);
         assert!(matches!(app.mode, Mode::Normal));
+    }
+}
+
+#[cfg(test)]
+mod fit_tests {
+    use super::*;
+
+    fn wide() -> DynamicImage {
+        DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            40,
+            20,
+            image::Rgba([200, 10, 10, 255]),
+        ))
+    }
+
+    #[test]
+    fn every_fit_gives_exactly_the_panel_size() {
+        for fit in [VisualFit::Fill, VisualFit::Fit, VisualFit::Stretch] {
+            for (w, h) in [(100, 100), (10, 80), (300, 20), (1, 1)] {
+                let img = scaled(&wide(), w, h, fit);
+                assert_eq!((img.width(), img.height()), (w, h), "{fit:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn fill_and_stretch_cover_everything_and_fit_leaves_bands() {
+        let opaque = |img: &DynamicImage| img.to_rgba8().pixels().all(|p| p[3] == 255);
+        assert!(opaque(&scaled(&wide(), 60, 60, VisualFit::Fill)));
+        assert!(opaque(&scaled(&wide(), 60, 60, VisualFit::Stretch)));
+        let fit = scaled(&wide(), 60, 60, VisualFit::Fit).to_rgba8();
+        assert_eq!(fit.get_pixel(30, 0)[3], 0, "empty band on top");
+        assert_eq!(fit.get_pixel(30, 59)[3], 0, "and at the bottom");
+        assert_eq!(fit.get_pixel(30, 30)[3], 255, "the picture in the middle");
+        assert_eq!(fit.get_pixel(0, 30)[3], 255, "as wide as the panel");
+    }
+
+    #[test]
+    fn the_fit_names_come_from_config_and_cycle() {
+        assert_eq!(VisualFit::from_config("fit"), VisualFit::Fit);
+        assert_eq!(VisualFit::from_config("Stretch"), VisualFit::Stretch);
+        assert_eq!(VisualFit::from_config("???"), VisualFit::Fill);
+        assert_eq!(VisualFit::Fill.cycle().cycle().cycle(), VisualFit::Fill);
     }
 }

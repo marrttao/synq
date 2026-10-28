@@ -630,3 +630,26 @@ fn panels_can_be_dragged_and_resized_with_the_mouse() {
     mouse(&mut app, Down(MouseButton::Left), 5, 5);
     assert!(matches!(app.mode, Mode::Normal));
 }
+
+#[test]
+fn lyrics_placed_over_the_picture_are_drawn_over_it() {
+    use super::layout::{Layout, Place};
+    let (_tmp, _paths, mut app) = setup_with_db();
+    // Lyrics exactly on top of the Visual panel (and nothing else shown).
+    let mut l = app.layouts.current().frozen(120);
+    l.name = "Over".into();
+    l.places[0].visible = false;
+    l.places[1] = Place {
+        visible: true,
+        x: 40,
+        y: 0,
+        w: 60,
+        h: 100,
+    };
+    l.places[2] = l.places[1];
+    app.layouts.save(l.clone()).unwrap();
+    let t = screen_text(&mut app, 120, 30);
+    assert!(t.contains("Lyrics"), "the lyrics stay visible");
+    assert!(!t.contains("Visual"), "the picture is under them");
+    let _: &Layout = &l;
+}

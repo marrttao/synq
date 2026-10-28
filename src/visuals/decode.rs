@@ -12,11 +12,15 @@ use image::{AnimationDecoder, DynamicImage, ImageReader};
 use thiserror::Error;
 
 /// Longest side of a stored frame. Terminal panels are far smaller than
-/// this, and 300 frames of it stay near 150 MB at worst.
-pub const MAX_DIM: u32 = 360;
+/// this; a panel can be made bigger, and a blurry picture is worse than
+/// a few more megabytes.
+pub const MAX_DIM: u32 = 720;
 /// Frames beyond this are dropped (the animation just gets shorter).
 pub const MAX_FRAMES: usize = 300;
 const MAX_FILE_BYTES: u64 = 128 << 20;
+/// All decoded frames of one picture together; the animation just gets
+/// shorter when a big GIF does not fit.
+const FRAME_BUDGET: usize = 256 << 20;
 /// Browsers show GIF delays below 20 ms as 100 ms; so do we.
 const MIN_DELAY: Duration = Duration::from_millis(20);
 const DEFAULT_DELAY: Duration = Duration::from_millis(100);
@@ -69,6 +73,7 @@ pub fn decode(path: &Path) -> Result<Animation, DecodeError> {
 fn decode_gif(path: &Path) -> Result<Vec<Frame>, DecodeError> {
     let decoder = GifDecoder::new(BufReader::new(File::open(path)?))?;
     let mut frames = Vec::new();
+    let mut used = 0usize;
     for frame in decoder.into_frames() {
         if frames.len() >= MAX_FRAMES {
             tracing::info!(
@@ -88,11 +93,13 @@ fn decode_gif(path: &Path) -> Result<Vec<Frame>, DecodeError> {
         };
         let (num, den) = frame.delay().numer_denom_ms();
         let delay = normalize_delay(Duration::from_millis(u64::from(num / den.max(1))));
-        let image = DynamicImage::ImageRgba8(frame.into_buffer());
-        frames.push(Frame {
-            image: shrink(image),
-            delay,
-        });
+        let image = shrink(DynamicImage::ImageRgba8(frame.into_buffer()));
+        used += image.width() as usize * image.height() as usize * 4;
+        if used > FRAME_BUDGET && !frames.is_empty() {
+            tracing::info!("{}: {} frames fit in memory", path.display(), frames.len());
+            break;
+        }
+        frames.push(Frame { image, delay });
     }
     Ok(frames)
 }

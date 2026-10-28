@@ -27,6 +27,7 @@ pub enum Action {
     LyricsLater,
     Fullscreen,
     PictureMode,
+    PictureFit,
     Refresh,
     NextLayout,
     PrevLayout,
@@ -35,7 +36,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 22] = [
+    pub const ALL: [Action; 23] = [
         Action::PlayPause,
         Action::Next,
         Action::Prev,
@@ -53,6 +54,7 @@ impl Action {
         Action::LyricsLater,
         Action::Fullscreen,
         Action::PictureMode,
+        Action::PictureFit,
         Action::NextLayout,
         Action::PrevLayout,
         Action::NextPalette,
@@ -80,6 +82,7 @@ impl Action {
             Action::LyricsLater => "lyrics_later",
             Action::Fullscreen => "fullscreen",
             Action::PictureMode => "picture_mode",
+            Action::PictureFit => "picture_fit",
             Action::Refresh => "refresh",
             Action::NextLayout => "next_layout",
             Action::PrevLayout => "prev_layout",
@@ -107,6 +110,7 @@ impl Action {
             Action::LyricsLater => "Lyrics later 0.1 s",
             Action::Fullscreen => "Full screen",
             Action::PictureMode => "Picture / ASCII",
+            Action::PictureFit => "Picture: fill / fit / stretch",
             Action::Refresh => "Refresh everything",
             Action::NextLayout => "Next layout",
             Action::PrevLayout => "Previous layout",
@@ -135,6 +139,7 @@ impl Action {
             Action::LyricsLater => plain(KeyCode::Char(']')),
             Action::Fullscreen => plain(KeyCode::Char('f')),
             Action::PictureMode => plain(KeyCode::Char('v')),
+            Action::PictureFit => plain(KeyCode::Char('V')),
             Action::Refresh => plain(KeyCode::F(5)),
             Action::NextLayout => plain(KeyCode::Char('}')),
             Action::PrevLayout => plain(KeyCode::Char('{')),

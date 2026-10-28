@@ -47,7 +47,7 @@ use lyrics_view::LyricsState;
 pub use palette::PaletteSet;
 use player::Player;
 use theme::Theme;
-use visual_view::{VisualMode, VisualState};
+use visual_view::{VisualFit, VisualMode, VisualState};
 use whisper_view::WhisperStatus;
 
 /// ~30 frames per second.
@@ -260,7 +260,11 @@ impl App {
             lyrics_state: LyricsState::Idle,
             lyrics_for: None,
             show_lyrics: true,
-            visual: VisualState::new(visuals, VisualMode::from_config(&config.visuals.mode)),
+            visual: VisualState::new(
+                visuals,
+                VisualMode::from_config(&config.visuals.mode),
+                VisualFit::from_config(&config.visuals.fit),
+            ),
             fx: Effects::new(config.ui.animations),
             fullscreen: false,
             palettes: PaletteSet::presets_only(&config.theme.preset),

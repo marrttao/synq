@@ -22,6 +22,10 @@ const STEP: i16 = 5;
 const CORNER_COLS: u16 = 3;
 const CORNER_ROWS: u16 = 2;
 
+/// Library, Lyrics, Visual from bottom to top as drawn on the screen:
+/// the picture is at the bottom, so lyrics can be placed over it.
+const Z_ORDER: [usize; 3] = [2, 0, 1];
+
 /// A mouse drag in progress.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Drag {
@@ -176,7 +180,8 @@ impl App {
         let (col, row) = (m.column, m.row);
         match m.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                let hit = (0..draft.places.len()).rev().find(|&i| {
+                // Top first: the order they are drawn in, backwards.
+                let hit = Z_ORDER.iter().rev().copied().find(|&i| {
                     draft.places[i].visible && inside(draft.places[i].raw_rect(main), col, row)
                 });
                 match hit {
@@ -250,7 +255,7 @@ impl App {
         let theme = &self.theme;
         let dim = Style::new().fg(theme.dim);
         // The selected panel is drawn last, so that it is never covered.
-        let mut order: Vec<usize> = (0..draft.places.len()).collect();
+        let mut order: Vec<usize> = Z_ORDER.to_vec();
         order.sort_by_key(|&i| i == *selected);
         for i in order {
             let place = draft.places[i];

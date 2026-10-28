@@ -81,6 +81,8 @@ pub struct VisualsConfig {
     pub protocol: String,
     /// How the picture is drawn: "picture" or "ascii" (key `v` switches).
     pub mode: String,
+    /// How the picture fits its panel: "fill", "fit" or "stretch" (key V).
+    pub fit: String,
     /// Pause GIF animation together with the music.
     pub pause_with_music: bool,
 }
@@ -134,6 +136,7 @@ impl Default for VisualsConfig {
         Self {
             protocol: "auto".into(),
             mode: "picture".into(),
+            fit: "fill".into(),
             pause_with_music: true,
         }
     }
@@ -179,6 +182,8 @@ language = "auto"
 protocol = "auto"
 # How the picture is drawn: "picture" or "ascii" (key v switches).
 mode = "picture"
+# How the picture fits its panel: "fill" (crops), "fit" (whole) or "stretch" (key V).
+fit = "fill"
 # Pause GIF animation together with the music.
 pause_with_music = true
 "##;
