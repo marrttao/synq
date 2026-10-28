@@ -47,6 +47,13 @@ pub(super) enum LyricsMode {
 }
 
 impl LyricsMode {
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Word => "word",
+        }
+    }
+
     pub(super) fn from_config(name: &str) -> Self {
         if name.trim().eq_ignore_ascii_case("word") {
             Self::Word

@@ -36,6 +36,13 @@ impl FontKind {
         }
     }
 
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Lobster => "lobster",
+            Self::Oswald => "oswald",
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Lobster => "Lobster",

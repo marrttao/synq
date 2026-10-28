@@ -14,6 +14,7 @@ mod menu_view;
 mod palette;
 mod palette_view;
 mod player;
+mod prefs;
 mod render;
 mod spectrum;
 #[cfg(test)]
@@ -51,6 +52,7 @@ pub use layout::LayoutSet;
 use lyrics_view::LyricsState;
 pub use palette::PaletteSet;
 use player::Player;
+pub use prefs::Prefs;
 use theme::Theme;
 use visual_view::{VisualFit, VisualMode, VisualState};
 use whisper_view::WhisperStatus;
@@ -213,6 +215,7 @@ pub struct App {
     palettes: PaletteSet,
     lyrics_backdrop: u8,
     spectrum: spectrum::Spectrum,
+    prefs: prefs::Prefs,
     sound_style: viz_view::SoundStyle,
     lyrics_mode: lyrics_view::LyricsMode,
     word_font: bigtext::FontKind,
@@ -283,6 +286,7 @@ impl App {
             palettes: PaletteSet::presets_only(&config.theme.preset),
             lyrics_backdrop: config.ui.lyrics_backdrop.min(100),
             spectrum: spectrum::Spectrum::default(),
+            prefs: prefs::Prefs::default(),
             sound_style: viz_view::SoundStyle::from_config(&config.ui.sound_style),
             lyrics_mode: lyrics_view::LyricsMode::from_config(&config.lyrics.display),
             word_font: bigtext::FontKind::from_config(&config.lyrics.word_font),
@@ -302,6 +306,65 @@ impl App {
         }
         self.palettes = palettes;
         self
+    }
+
+    /// Put back the choices of the last run (they win over config.toml).
+    pub fn with_prefs(mut self, prefs: prefs::Prefs) -> Self {
+        if let Some(v) = prefs.get("picture_mode") {
+            self.visual.mode = VisualMode::from_config(v);
+        }
+        if let Some(v) = prefs.get("picture_fit") {
+            self.visual.fit = VisualFit::from_config(v);
+        }
+        if let Some(v) = prefs.get("picture_crop").and_then(|v| v.parse::<u8>().ok()) {
+            self.visual.crop = v.min(90);
+        }
+        if let Some(v) = prefs.get("lyrics_mode") {
+            self.lyrics_mode = lyrics_view::LyricsMode::from_config(v);
+        }
+        if let Some(v) = prefs.get("word_font") {
+            self.word_font = bigtext::FontKind::from_config(v);
+        }
+        if let Some(v) = prefs.get("sound_style") {
+            self.sound_style = viz_view::SoundStyle::from_config(v);
+        }
+        if let Some(v) = prefs.get("show_lyrics") {
+            self.show_lyrics = v != "off";
+        }
+        self.player.restore(
+            prefs.get("volume").and_then(|v| v.parse::<f32>().ok()),
+            prefs.get("shuffle").map(|v| v == "on"),
+            prefs
+                .get("repeat")
+                .and_then(crate::audio::queue::Repeat::from_name),
+        );
+        self.prefs = prefs;
+        self
+    }
+
+    /// What is worth remembering, as it is now.
+    fn pref_snapshot(&self) -> Vec<(&'static str, String)> {
+        let on = |b: bool| if b { "on" } else { "off" }.to_owned();
+        vec![
+            ("picture_mode", self.visual.mode.name().to_owned()),
+            ("picture_fit", self.visual.fit.name().to_owned()),
+            ("picture_crop", self.visual.crop.to_string()),
+            ("lyrics_mode", self.lyrics_mode.name().to_owned()),
+            ("word_font", self.word_font.name().to_owned()),
+            ("sound_style", self.sound_style.name().to_owned()),
+            ("show_lyrics", on(self.show_lyrics)),
+            ("volume", format!("{:.2}", self.player.volume)),
+            ("shuffle", on(self.player.shuffle)),
+            ("repeat", self.player.repeat.name().to_owned()),
+        ]
+    }
+
+    /// Save what changed since the last time (after every key or global key).
+    fn persist_prefs(&mut self) {
+        let now = self.pref_snapshot();
+        if let Some(problem) = self.prefs.store(&now) {
+            self.status = problem;
+        }
     }
 
     pub fn with_layouts(mut self, layouts: LayoutSet) -> Self {
@@ -371,8 +434,11 @@ impl App {
         loop {
             match self.library_rx.try_recv() {
                 Ok(LibraryEvent::Scanning) => self.scanning = true,
-                Ok(LibraryEvent::Tracks(tracks)) => {
+                Ok(LibraryEvent::Tracks(mut tracks)) => {
                     self.scanning = false;
+                    // Files deleted by hand are simply gone from the list; the
+                    // database keeps them in case the file comes back.
+                    tracks.retain(|t| !t.missing);
                     self.keep_selection(|app| {
                         app.track_index =
                             tracks.iter().enumerate().map(|(i, t)| (t.id, i)).collect();
@@ -554,6 +620,11 @@ impl App {
             self.should_quit = true;
             return;
         }
+        self.handle_key(key);
+        self.persist_prefs();
+    }
+
+    fn handle_key(&mut self, key: KeyEvent) {
         match &self.mode {
             Mode::Normal => self.key_normal(key),
             Mode::Search => self.key_search(key),

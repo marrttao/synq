@@ -157,6 +157,22 @@ impl Player {
         self.audio.send(Command::Volume(self.volume));
     }
 
+    /// Put back what was chosen in an earlier run.
+    pub fn restore(&mut self, volume: Option<f32>, shuffle: Option<bool>, repeat: Option<Repeat>) {
+        if let Some(v) = volume {
+            self.volume = v.clamp(0.0, 1.0);
+            self.audio.send(Command::Volume(self.volume));
+        }
+        if let Some(s) = shuffle {
+            self.shuffle = s;
+            self.audio.send(Command::SetShuffle(s));
+        }
+        if let Some(r) = repeat {
+            self.repeat = r;
+            self.audio.send(Command::SetRepeat(r));
+        }
+    }
+
     pub fn toggle_shuffle(&mut self) {
         self.shuffle = !self.shuffle;
         self.audio.send(Command::SetShuffle(self.shuffle));

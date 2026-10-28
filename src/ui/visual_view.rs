@@ -53,6 +53,15 @@ pub(super) enum VisualFit {
 }
 
 impl VisualFit {
+    /// The name used in config.toml and in the saved settings.
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Self::Fill => "fill",
+            Self::Fit => "fit",
+            Self::Stretch => "stretch",
+        }
+    }
+
     pub(super) fn from_config(name: &str) -> Self {
         match name.trim().to_lowercase().as_str() {
             "fill" => Self::Fill,
@@ -79,6 +88,14 @@ impl VisualFit {
 }
 
 impl VisualMode {
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Self::Picture => "picture",
+            Self::Blocks => "blocks",
+            Self::Ascii => "ascii",
+        }
+    }
+
     pub(super) fn from_config(name: &str) -> Self {
         match name.trim().to_lowercase().as_str() {
             "ascii" => Self::Ascii,

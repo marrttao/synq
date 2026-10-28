@@ -1,6 +1,10 @@
 # PROGRESS
 
 
+## Stage 16: remembered choices, no deleted tracks
+- `ui/prefs.rs`: picture mode/fit/crop, lyrics mode, word font, sound style, lyrics shown, volume, shuffle, repeat are saved (`pref:*` in settings) after every key or global key, only when changed, and restored over config.toml.
+- Tracks flagged missing are dropped from the lists (the database still has them).
+
 ## Stage 15: no more freezes from pictures
 - Frames are scaled (and sixel-encoded) on two worker threads (`ui/render.rs`); the interface shows the newest ready frame and asks for the next few. Before, every new frame was scaled between two screen updates: ~7 ms for blocks and 66 ms for pixels at 1500x900, over the 33 ms frame budget.
 - Pixel frames kept are capped by memory (160 MB).

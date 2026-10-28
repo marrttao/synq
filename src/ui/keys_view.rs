@@ -116,6 +116,7 @@ impl App {
         for a in actions {
             self.run_action(a);
         }
+        self.persist_prefs();
     }
 
     /// Tell the system which keys are global now.

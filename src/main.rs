@@ -49,11 +49,13 @@ fn main() -> Result<()> {
         library::spawn_refreshable(paths.music.clone(), paths.db.clone());
     let (keymap, keys_problem) = keys::Keymap::load(paths.db.clone());
     let (layouts, layouts_problem) = ui::LayoutSet::load(paths.db.clone());
+    let (prefs, prefs_problem) = ui::Prefs::load(paths.db.clone());
     let (palettes, palettes_problem) = ui::PaletteSet::load(paths.db.clone(), &config.theme.preset);
     let status = status
         .or(keys_problem)
         .or(layouts_problem)
         .or(palettes_problem)
+        .or(prefs_problem)
         // Started from another folder, `synq` would otherwise look empty
         // without any explanation.
         .or_else(|| {
@@ -83,6 +85,7 @@ fn main() -> Result<()> {
     )
     .with_layouts(layouts)
     .with_palettes(palettes)
+    .with_prefs(prefs)
     .with_system(keymap, hotkeys, library_refresh)
     .run(&mut terminal);
     // The layout editor turns the mouse on; make sure it is off again.

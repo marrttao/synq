@@ -42,6 +42,10 @@ impl SoundStyle {
         }
     }
 
+    pub(super) fn name(self) -> &'static str {
+        self.label()
+    }
+
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::Bars => "bars",

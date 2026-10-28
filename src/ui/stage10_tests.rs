@@ -822,3 +822,94 @@ fn the_sound_panel_has_a_mirror_style_and_x_switches_it() {
         screen_text(&mut app, w, h);
     }
 }
+
+fn restart(paths: &Paths) -> App {
+    let (_tx, rx) = mpsc::channel();
+    let (prefs, problem) = Prefs::load(paths.db.clone());
+    assert!(problem.is_none());
+    App::new(
+        &test_config(),
+        None,
+        rx,
+        playlists::spawn(paths),
+        lyrics::spawn(paths.db.clone(), paths.lyrics.clone(), false),
+        transcribe::spawn(&test_config().whisper, paths),
+        test_visuals(paths),
+        paths.music.clone(),
+    )
+    .with_prefs(prefs)
+}
+
+#[test]
+fn what_the_user_chose_is_there_again_after_a_restart() {
+    let (_tmp, paths, mut app, _r) = setup();
+    let (prefs, _) = Prefs::load(paths.db.clone());
+    app = app.with_prefs(prefs);
+    // ASCII picture, one-word lyrics in the other font, mirror sound, bigger
+    // picture, lyrics hidden, shuffle on.
+    key(&mut app, KeyCode::Char('v'));
+    key(&mut app, KeyCode::Char('v'));
+    key(&mut app, KeyCode::Char('w'));
+    key(&mut app, KeyCode::Char('W'));
+    key(&mut app, KeyCode::Char('x'));
+    key(&mut app, KeyCode::Char('z'));
+    key(&mut app, KeyCode::Char('l'));
+    key(&mut app, KeyCode::Char('s'));
+    key(&mut app, KeyCode::Char('V'));
+    drop(app);
+
+    let app = restart(&paths);
+    assert_eq!(app.visual.mode, VisualMode::Ascii);
+    assert_eq!(app.visual.fit, super::visual_view::VisualFit::Stretch);
+    assert_eq!(app.visual.crop, 45);
+    assert_eq!(app.lyrics_mode, lyrics_view::LyricsMode::Word);
+    assert_eq!(app.word_font, bigtext::FontKind::Oswald);
+    assert_eq!(app.sound_style, viz_view::SoundStyle::Mirror);
+    assert!(!app.show_lyrics);
+    assert!(app.player.shuffle);
+}
+
+#[test]
+fn a_global_key_is_remembered_too_and_unchanged_values_cost_nothing() {
+    let (_tmp, paths, mut app, _r) = setup();
+    let (prefs, _) = Prefs::load(paths.db.clone());
+    app = app.with_prefs(prefs);
+    app.run_action(Action::PictureMode);
+    app.persist_prefs();
+    assert_eq!(app.prefs.get("picture_mode"), Some("blocks"));
+    app.persist_prefs();
+    let again = restart(&paths);
+    assert_eq!(again.visual.mode, VisualMode::Blocks);
+}
+
+#[test]
+fn files_deleted_by_hand_are_not_listed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = Paths::new(tmp.path().to_path_buf());
+    paths.ensure_dirs().unwrap();
+    let (tx, rx) = mpsc::channel();
+    let mut app = App::new(
+        &test_config(),
+        None,
+        rx,
+        playlists::spawn(&paths),
+        lyrics::spawn(paths.db.clone(), paths.lyrics.clone(), false),
+        transcribe::spawn(&test_config().whisper, &paths),
+        test_visuals(&paths),
+        paths.music.clone(),
+    );
+    let mut gone = track(2, "gone");
+    gone.missing = true;
+    tx.send(crate::library::LibraryEvent::Tracks(vec![
+        track(1, "here"),
+        gone,
+        track(3, "also here"),
+    ]))
+    .unwrap();
+    app.drain_library_events();
+    assert_eq!(app.tracks.len(), 2);
+    assert!(app.tracks.iter().all(|t| !t.missing));
+    let t = screen_text(&mut app, 120, 30);
+    assert!(t.contains("here") && !t.contains("gone"));
+    assert!(t.contains("2 tracks"), "the count agrees");
+}

@@ -11,6 +11,23 @@ pub enum Repeat {
 }
 
 impl Repeat {
+    pub fn name(self) -> &'static str {
+        match self {
+            Repeat::Off => "off",
+            Repeat::All => "all",
+            Repeat::One => "one",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "off" => Some(Repeat::Off),
+            "all" => Some(Repeat::All),
+            "one" => Some(Repeat::One),
+            _ => None,
+        }
+    }
+
     pub fn cycle(self) -> Self {
         match self {
             Repeat::Off => Repeat::All,
