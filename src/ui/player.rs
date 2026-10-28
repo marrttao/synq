@@ -62,14 +62,14 @@ impl Player {
     }
 
     /// Play `tracks[selected]` with the whole list as the queue.
-    pub fn play_from(&mut self, tracks: &[Track], selected: usize) -> Result<(), String> {
-        let Some(chosen) = tracks.get(selected) else {
+    pub fn play_from(&self, tracks: &[&Track], selected: usize) -> Result<(), String> {
+        let Some(&chosen) = tracks.get(selected) else {
             return Ok(());
         };
         if chosen.missing {
             return Err(format!("{}: file is missing", chosen.title));
         }
-        let playable: Vec<&Track> = tracks.iter().filter(|t| !t.missing).collect();
+        let playable: Vec<&Track> = tracks.iter().copied().filter(|t| !t.missing).collect();
         let start = playable.iter().position(|t| t.id == chosen.id).unwrap_or(0);
         let items = playable
             .iter()

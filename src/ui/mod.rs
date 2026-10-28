@@ -1,33 +1,76 @@
-//! Terminal UI: application state, layout and the main loop.
+//! Terminal UI: application state, input handling and the main loop.
+//! Rendering lives in `draw.rs`.
 
+mod draw;
 mod player;
 mod theme;
 mod tracklist;
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Modifier, Style};
-use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, LineGauge, List, ListState, Paragraph, Tabs};
-use ratatui::{DefaultTerminal, Frame};
+use ratatui::DefaultTerminal;
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::widgets::ListState;
 
-use crate::audio::queue::Repeat;
 use crate::config::Config;
 use crate::db::Track;
 use crate::library::LibraryEvent;
+use crate::playlists::{self, PlaylistInfo, Target};
 use player::Player;
 use theme::Theme;
-use tracklist::fmt_duration;
 
 /// ~30 frames per second.
 const FRAME: Duration = Duration::from_millis(33);
 const PAGE: usize = 10;
 const TABS: [&str; 3] = ["Library", "Playlists", "Favorites"];
+const MAX_INPUT: usize = 100;
+
+/// What the left panel is showing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum View {
+    Library,
+    PlaylistList,
+    PlaylistTracks(i64),
+    Favorites,
+}
+
+impl View {
+    /// Each view remembers its own selection.
+    fn slot(self) -> usize {
+        match self {
+            View::Library => 0,
+            View::PlaylistList => 1,
+            View::PlaylistTracks(_) => 2,
+            View::Favorites => 3,
+        }
+    }
+}
+
+/// Modal states; everything but `Normal` captures the keyboard.
+enum Mode {
+    Normal,
+    /// Typing a search filter.
+    Search,
+    /// Typing a playlist name (`rename` holds the playlist being renamed).
+    Prompt {
+        rename: Option<i64>,
+        text: String,
+    },
+    /// Waiting for y/n before deleting a playlist.
+    Confirm {
+        id: i64,
+        name: String,
+    },
+    /// Choosing the playlist for a track.
+    Pick {
+        track_id: i64,
+        state: ListState,
+    },
+}
 
 pub struct App {
     theme: Theme,
@@ -36,9 +79,17 @@ pub struct App {
     status: String,
     library_rx: Receiver<LibraryEvent>,
     tracks: Vec<Track>,
-    list_state: ListState,
+    track_index: HashMap<i64, usize>,
     scanning: bool,
+    playlists: playlists::Handle,
+    playlist_data: Vec<PlaylistInfo>,
+    favorites: Vec<i64>,
+    favorite_set: HashSet<i64>,
     tab: usize,
+    open_playlist: Option<i64>,
+    filter: String,
+    mode: Mode,
+    lists: [ListState; 4],
     player: Player,
 }
 
@@ -47,6 +98,7 @@ impl App {
         config: &Config,
         status: Option<String>,
         library_rx: Receiver<LibraryEvent>,
+        playlists: playlists::Handle,
         music_dir: PathBuf,
     ) -> Self {
         Self {
@@ -55,9 +107,17 @@ impl App {
             status: status.unwrap_or_else(|| "q: quit".into()),
             library_rx,
             tracks: Vec::new(),
-            list_state: ListState::default(),
+            track_index: HashMap::new(),
             scanning: true,
+            playlists,
+            playlist_data: Vec::new(),
+            favorites: Vec::new(),
+            favorite_set: HashSet::new(),
             tab: 0,
+            open_playlist: None,
+            filter: String::new(),
+            mode: Mode::Normal,
+            lists: Default::default(),
             player: Player::new(&config.audio, music_dir),
         }
     }
@@ -66,6 +126,7 @@ impl App {
         let mut next_frame = Instant::now();
         while !self.should_quit {
             self.drain_library_events();
+            self.drain_playlist_events();
             if let Some(err) = self.player.poll() {
                 self.status = err;
             }
@@ -91,13 +152,19 @@ impl App {
         Ok(())
     }
 
+    // ---- data from background threads -------------------------------------
+
     fn drain_library_events(&mut self) {
         loop {
             match self.library_rx.try_recv() {
                 Ok(LibraryEvent::Scanning) => self.scanning = true,
                 Ok(LibraryEvent::Tracks(tracks)) => {
                     self.scanning = false;
-                    self.set_tracks(tracks);
+                    self.keep_selection(|app| {
+                        app.track_index =
+                            tracks.iter().enumerate().map(|(i, t)| (t.id, i)).collect();
+                        app.tracks = tracks;
+                    });
                 }
                 Ok(LibraryEvent::Error(msg)) => {
                     self.scanning = false;
@@ -108,33 +175,148 @@ impl App {
         }
     }
 
-    /// Replace the list, keeping the selection on the same track if it survives.
-    fn set_tracks(&mut self, tracks: Vec<Track>) {
-        let selected_id = self
-            .list_state
-            .selected()
-            .and_then(|i| self.tracks.get(i))
-            .map(|t| t.id);
-        let new_index = selected_id
-            .and_then(|id| tracks.iter().position(|t| t.id == id))
-            .or_else(|| self.list_state.selected())
-            .map(|i| i.min(tracks.len().saturating_sub(1)));
-        self.tracks = tracks;
-        self.list_state.select(if self.tracks.is_empty() {
+    fn drain_playlist_events(&mut self) {
+        while let Ok(ev) = self.playlists.events.try_recv() {
+            match ev {
+                playlists::Event::Snapshot(s) => self.keep_selection(|app| {
+                    app.playlist_data = s.playlists;
+                    app.favorite_set = s.favorites.iter().copied().collect();
+                    app.favorites = s.favorites;
+                    // An opened playlist may have been deleted.
+                    if let Some(id) = app.open_playlist
+                        && !app.playlist_data.iter().any(|p| p.id == id)
+                    {
+                        app.open_playlist = None;
+                    }
+                }),
+                playlists::Event::Notice(msg) | playlists::Event::Error(msg) => {
+                    self.status = msg;
+                }
+            }
+        }
+    }
+
+    // ---- what is visible --------------------------------------------------
+
+    fn view(&self) -> View {
+        match (self.tab, self.open_playlist) {
+            (0, _) => View::Library,
+            (1, None) => View::PlaylistList,
+            (1, Some(id)) => View::PlaylistTracks(id),
+            _ => View::Favorites,
+        }
+    }
+
+    fn ids_to_tracks(&self, ids: &[i64]) -> Vec<&Track> {
+        ids.iter()
+            .filter_map(|id| self.track_index.get(id).map(|&i| &self.tracks[i]))
+            .collect()
+    }
+
+    /// Tracks of the current view with the search filter applied.
+    fn view_tracks(&self) -> Vec<&Track> {
+        let base: Vec<&Track> = match self.view() {
+            View::Library => self.tracks.iter().collect(),
+            View::PlaylistTracks(id) => self
+                .playlist_data
+                .iter()
+                .find(|p| p.id == id)
+                .map(|p| self.ids_to_tracks(&p.tracks))
+                .unwrap_or_default(),
+            View::Favorites => self.ids_to_tracks(&self.favorites),
+            View::PlaylistList => Vec::new(),
+        };
+        if self.filter.is_empty() {
+            return base;
+        }
+        let needle = self.filter.to_lowercase();
+        base.into_iter()
+            .filter(|t| {
+                [&t.artist, &t.title, &t.album]
+                    .iter()
+                    .any(|s| s.to_lowercase().contains(&needle))
+            })
+            .collect()
+    }
+
+    fn view_playlists(&self) -> Vec<&PlaylistInfo> {
+        let needle = self.filter.to_lowercase();
+        self.playlist_data
+            .iter()
+            .filter(|p| needle.is_empty() || p.name.to_lowercase().contains(&needle))
+            .collect()
+    }
+
+    fn view_len(&self) -> usize {
+        match self.view() {
+            View::PlaylistList => self.view_playlists().len(),
+            _ => self.view_tracks().len(),
+        }
+    }
+
+    /// Id of the selected item: a track id, or a playlist id in the list view.
+    fn selected_id(&self) -> Option<i64> {
+        let sel = self.lists[self.view().slot()].selected()?;
+        match self.view() {
+            View::PlaylistList => self.view_playlists().get(sel).map(|p| p.id),
+            _ => self.view_tracks().get(sel).map(|t| t.id),
+        }
+    }
+
+    fn selected_track(&self) -> Option<&Track> {
+        if self.view() == View::PlaylistList {
+            return None;
+        }
+        let sel = self.lists[self.view().slot()].selected()?;
+        self.view_tracks().get(sel).copied()
+    }
+
+    fn selected_playlist(&self) -> Option<&PlaylistInfo> {
+        if self.view() != View::PlaylistList {
+            return None;
+        }
+        let sel = self.lists[self.view().slot()].selected()?;
+        self.view_playlists().get(sel).copied()
+    }
+
+    /// Run `change`, then keep the selection on the same item if it still
+    /// exists (otherwise clamp it).
+    fn keep_selection(&mut self, change: impl FnOnce(&mut Self)) {
+        let id = self.selected_id();
+        let old_index = self.lists[self.view().slot()].selected();
+        change(self);
+        let view = self.view();
+        let len = self.view_len();
+        let position = id.and_then(|id| match view {
+            View::PlaylistList => self.view_playlists().iter().position(|p| p.id == id),
+            _ => self.view_tracks().iter().position(|t| t.id == id),
+        });
+        let new = position.or(old_index).map(|i| i.min(len.saturating_sub(1)));
+        self.lists[view.slot()].select(if len == 0 {
             None
         } else {
-            Some(new_index.unwrap_or(0))
+            Some(new.unwrap_or(0))
         });
     }
 
+    fn reset_selection(&mut self) {
+        let slot = self.view().slot();
+        let none = self.view_len() == 0;
+        self.lists[slot].select(if none { None } else { Some(0) });
+    }
+
     fn move_selection(&mut self, delta: isize) {
-        if self.tracks.is_empty() {
+        let len = self.view_len();
+        if len == 0 {
             return;
         }
-        let cur = self.list_state.selected().unwrap_or(0) as isize;
-        let next = (cur + delta).clamp(0, self.tracks.len() as isize - 1);
-        self.list_state.select(Some(next as usize));
+        let slot = self.view().slot();
+        let cur = self.lists[slot].selected().unwrap_or(0) as isize;
+        let next = (cur + delta).clamp(0, len as isize - 1);
+        self.lists[slot].select(Some(next as usize));
     }
+
+    // ---- input ------------------------------------------------------------
 
     fn handle_event(&mut self, ev: Event) {
         // Windows reports both press and release; only react to presses.
@@ -142,20 +324,34 @@ impl App {
         if key.kind != KeyEventKind::Press {
             return;
         }
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.should_quit = true;
+            return;
+        }
+        match &self.mode {
+            Mode::Normal => self.key_normal(key),
+            Mode::Search => self.key_search(key),
+            Mode::Prompt { .. } => self.key_prompt(key),
+            Mode::Confirm { .. } => self.key_confirm(key),
+            Mode::Pick { .. } => self.key_pick(key),
+        }
+    }
+
+    fn key_normal(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.should_quit = true;
-            }
             KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
             KeyCode::PageDown => self.move_selection(PAGE as isize),
             KeyCode::PageUp => self.move_selection(-(PAGE as isize)),
-            KeyCode::Home => self.list_state.select_first(),
-            KeyCode::End => self.list_state.select_last(),
-            KeyCode::Tab => self.tab = (self.tab + 1) % TABS.len(),
-            KeyCode::BackTab => self.tab = (self.tab + TABS.len() - 1) % TABS.len(),
-            KeyCode::Enter => self.play_selected(),
+            KeyCode::Home => self.lists[self.view().slot()].select_first(),
+            KeyCode::End => self.lists[self.view().slot()].select_last(),
+            KeyCode::Tab => self.switch_tab((self.tab + 1) % TABS.len()),
+            KeyCode::BackTab => self.switch_tab((self.tab + TABS.len() - 1) % TABS.len()),
+            KeyCode::Enter => self.activate(),
+            KeyCode::Esc => self.go_back(true),
+            KeyCode::Backspace => self.go_back(false),
+            KeyCode::Char('/') => self.mode = Mode::Search,
             KeyCode::Char(' ') => {
                 if !self.player.toggle_pause() {
                     self.play_selected();
@@ -169,23 +365,59 @@ impl App {
             KeyCode::Char('-') => self.player.change_volume(false),
             KeyCode::Char('s') => self.player.toggle_shuffle(),
             KeyCode::Char('r') => self.player.cycle_repeat(),
+            KeyCode::Char('f') => self.toggle_favorite(),
+            KeyCode::Char('a') => self.start_pick(),
+            KeyCode::Char('c') => self.start_create(),
+            KeyCode::Char('e') => self.start_rename(),
+            KeyCode::Char('d') | KeyCode::Delete => self.delete_selected(),
             _ => {}
+        }
+    }
+
+    fn switch_tab(&mut self, tab: usize) {
+        self.tab = tab;
+        self.open_playlist = None;
+        self.filter.clear();
+        self.keep_selection(|_| {});
+    }
+
+    /// Esc clears the filter first; Esc/Backspace then leave an opened playlist.
+    fn go_back(&mut self, clears_filter: bool) {
+        if clears_filter && !self.filter.is_empty() {
+            self.filter.clear();
+            self.reset_selection();
+        } else if self.open_playlist.is_some() {
+            self.open_playlist = None;
+            self.filter.clear();
+            self.keep_selection(|_| {});
+        }
+    }
+
+    fn activate(&mut self) {
+        if let Some(id) = self.selected_playlist().map(|p| p.id) {
+            self.open_playlist = Some(id);
+            self.filter.clear();
+            self.reset_selection();
+        } else {
+            self.play_selected();
         }
     }
 
     fn now_playing(&self) -> Option<&Track> {
         let id = self.player.now_id?;
-        self.tracks.iter().find(|t| t.id == id)
+        self.track_index.get(&id).map(|&i| &self.tracks[i])
     }
 
     fn play_selected(&mut self) {
-        if self.tab != 0 {
-            return;
-        }
-        let Some(selected) = self.list_state.selected() else {
+        let Some(selected) = self.lists[self.view().slot()].selected() else {
             return;
         };
-        if let Err(msg) = self.player.play_from(&self.tracks, selected) {
+        let result = {
+            let tracks = self.view_tracks();
+            // `play_from` only needs &self, so the borrowed `tracks` are fine.
+            self.player.play_from(&tracks, selected)
+        };
+        if let Err(msg) = result {
             self.status = msg;
         }
     }
@@ -197,164 +429,314 @@ impl App {
         self.player.seek(forward, duration);
     }
 
-    fn draw(&mut self, f: &mut Frame) {
-        let area = f.area();
-        f.render_widget(
-            Block::new().style(
-                Style::new()
-                    .bg(self.theme.background)
-                    .fg(self.theme.foreground),
-            ),
-            area,
-        );
-        let [main, bottom] =
-            Layout::vertical([Constraint::Min(3), Constraint::Length(5)]).areas(area);
-
-        // Narrow windows collapse side panels.
-        let (show_left, show_right) = (area.width >= 70, area.width >= 110);
-        let mut constraints = Vec::new();
-        if show_left {
-            constraints.push(Constraint::Percentage(34));
-        }
-        constraints.push(Constraint::Min(20));
-        if show_right {
-            constraints.push(Constraint::Percentage(24));
-        }
-        let cols = Layout::horizontal(constraints).split(main);
-        let mut cols = cols.iter().copied();
-        if show_left && let Some(r) = cols.next() {
-            self.draw_browser(f, r);
-        }
-        if let Some(r) = cols.next() {
-            f.render_widget(self.block("Lyrics"), r);
-        }
-        if show_right && let Some(r) = cols.next() {
-            f.render_widget(self.block("Visual"), r);
-        }
-
-        self.draw_player_bar(f, bottom);
+    /// Track the favorite/playlist keys act on: the selected one, else the
+    /// one that is playing.
+    fn target_track_id(&self) -> Option<i64> {
+        self.selected_track().map(|t| t.id).or(self.player.now_id)
     }
 
-    /// Bottom panel: now playing, progress, and the state line.
-    fn draw_player_bar(&self, f: &mut Frame, area: Rect) {
-        let block = self.block("synq");
-        let inner = block.inner(area);
-        f.render_widget(block, area);
-        let [title_row, progress_row, state_row] = Layout::vertical([Constraint::Length(1); 3])
-            .flex(ratatui::layout::Flex::Start)
-            .areas(inner);
-
-        let now = self.now_playing();
-        let (icon, title) = match now {
-            Some(t) => (
-                if self.player.paused {
-                    "\u{23F8}"
-                } else {
-                    "\u{25B6}"
-                },
-                format!("{} - {}", t.artist, t.title),
-            ),
-            None => (
-                "\u{25A0}",
-                "Nothing playing (Enter: play selected)".to_owned(),
-            ),
+    fn toggle_favorite(&mut self) {
+        let Some(track) = self.target_track_id() else {
+            self.status = "Select a track first".into();
+            return;
         };
-        f.render_widget(
-            Paragraph::new(format!("{icon} {title}")).style(Style::new().fg(self.theme.accent)),
-            title_row,
-        );
-
-        let total_ms = now.map_or(0, |t| t.duration_ms);
-        let pos_ms = self.player.position.as_millis() as u64;
-        let ratio = if total_ms == 0 {
-            0.0
+        let target = Target::Favorites;
+        self.playlists.send(if self.favorite_set.contains(&track) {
+            playlists::Command::Remove { target, track }
         } else {
-            (pos_ms as f64 / total_ms as f64).clamp(0.0, 1.0)
-        };
-        let label = format!("{} / {}", fmt_duration(pos_ms), fmt_duration(total_ms));
-        f.render_widget(
-            LineGauge::default()
-                .ratio(ratio)
-                .label(Line::from(label))
-                .filled_style(Style::new().fg(self.theme.accent))
-                .unfilled_style(Style::new().fg(self.theme.border))
-                .style(Style::new().fg(self.theme.foreground)),
-            progress_row,
-        );
-
-        let repeat = match self.player.repeat {
-            Repeat::Off => "off",
-            Repeat::All => "all",
-            Repeat::One => "one",
-        };
-        let shuffle = if self.player.shuffle { "on" } else { "off" };
-        let scanning = if self.scanning { " | scanning..." } else { "" };
-        let text = format!(
-            "vol {}% | shuffle {shuffle} | repeat {repeat} | {} tracks{scanning} | {}",
-            (self.player.volume * 100.0).round() as u32,
-            self.tracks.len(),
-            self.status
-        );
-        f.render_widget(
-            Paragraph::new(text).style(Style::new().fg(self.theme.dim)),
-            state_row,
-        );
+            playlists::Command::Add { target, track }
+        });
     }
 
-    /// Left panel: tabs plus the track list.
-    fn draw_browser(&mut self, f: &mut Frame, area: Rect) {
-        let block = self.block("");
-        let inner = block.inner(area);
-        f.render_widget(block, area);
-        let [tabs_area, body] =
-            Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(inner);
+    fn start_pick(&mut self) {
+        let Some(track_id) = self.target_track_id() else {
+            self.status = "Select a track first".into();
+            return;
+        };
+        if self.playlist_data.is_empty() {
+            self.status = "No playlists yet: open the Playlists tab and press c".into();
+            return;
+        }
+        let mut state = ListState::default();
+        state.select_first();
+        self.mode = Mode::Pick { track_id, state };
+    }
 
-        let tabs = Tabs::new(TABS)
-            .select(self.tab)
-            .style(Style::new().fg(self.theme.dim))
-            .highlight_style(
-                Style::new()
-                    .fg(self.theme.accent)
-                    .add_modifier(Modifier::BOLD),
-            );
-        f.render_widget(tabs, tabs_area);
-
-        if self.tab != 0 {
-            f.render_widget(
-                Paragraph::new("Coming in a later stage").style(Style::new().fg(self.theme.dim)),
-                body,
-            );
-        } else if self.tracks.is_empty() {
-            let hint = if self.scanning {
-                "Scanning music/ ..."
-            } else {
-                "No tracks yet. Drop audio files into music/"
+    fn start_create(&mut self) {
+        if self.view() == View::PlaylistList {
+            self.mode = Mode::Prompt {
+                rename: None,
+                text: String::new(),
             };
-            f.render_widget(
-                Paragraph::new(hint).style(Style::new().fg(self.theme.dim)),
-                body,
-            );
-        } else {
-            let playing = self.player.now_id;
-            let items = self
-                .tracks
-                .iter()
-                .map(|t| tracklist::item(t, &self.theme, playing == Some(t.id)));
-            let list = List::new(items).highlight_style(
-                Style::new()
-                    .bg(self.theme.accent)
-                    .fg(self.theme.background)
-                    .add_modifier(Modifier::BOLD),
-            );
-            f.render_stateful_widget(list, body, &mut self.list_state);
         }
     }
 
-    fn block<'a>(&self, title: &'a str) -> Block<'a> {
-        Block::new()
-            .borders(Borders::ALL)
-            .title(title)
-            .border_style(Style::new().fg(self.theme.border))
-            .title_style(Style::new().fg(self.theme.accent))
+    fn start_rename(&mut self) {
+        if let Some(p) = self.selected_playlist() {
+            self.mode = Mode::Prompt {
+                rename: Some(p.id),
+                text: p.name.clone(),
+            };
+        }
+    }
+
+    /// `d`: delete a playlist (after confirmation) or remove a track from
+    /// the playlist / favorites being shown.
+    fn delete_selected(&mut self) {
+        match self.view() {
+            View::PlaylistList => {
+                if let Some(p) = self.selected_playlist() {
+                    self.mode = Mode::Confirm {
+                        id: p.id,
+                        name: p.name.clone(),
+                    };
+                }
+            }
+            View::PlaylistTracks(id) => {
+                if let Some(track) = self.selected_track().map(|t| t.id) {
+                    self.playlists.send(playlists::Command::Remove {
+                        target: Target::Playlist(id),
+                        track,
+                    });
+                }
+            }
+            View::Favorites => {
+                if let Some(track) = self.selected_track().map(|t| t.id) {
+                    self.playlists.send(playlists::Command::Remove {
+                        target: Target::Favorites,
+                        track,
+                    });
+                }
+            }
+            View::Library => {}
+        }
+    }
+
+    fn key_search(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Enter => self.mode = Mode::Normal,
+            KeyCode::Esc => {
+                self.filter.clear();
+                self.mode = Mode::Normal;
+                self.reset_selection();
+            }
+            KeyCode::Backspace => {
+                self.filter.pop();
+                self.reset_selection();
+            }
+            KeyCode::Char(c) if self.filter.chars().count() < MAX_INPUT => {
+                self.filter.push(c);
+                self.reset_selection();
+            }
+            KeyCode::Down => self.move_selection(1),
+            KeyCode::Up => self.move_selection(-1),
+            _ => {}
+        }
+    }
+
+    fn key_prompt(&mut self, key: KeyEvent) {
+        let Mode::Prompt { rename, text } = &mut self.mode else {
+            return;
+        };
+        match key.code {
+            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Backspace => {
+                text.pop();
+            }
+            KeyCode::Char(c) if text.chars().count() < MAX_INPUT => text.push(c),
+            KeyCode::Enter => {
+                let name = text.clone();
+                let cmd = match *rename {
+                    Some(id) => playlists::Command::Rename { id, name },
+                    None => playlists::Command::Create(name),
+                };
+                self.mode = Mode::Normal;
+                self.playlists.send(cmd);
+            }
+            _ => {}
+        }
+    }
+
+    fn key_confirm(&mut self, key: KeyEvent) {
+        let Mode::Confirm { id, .. } = &self.mode else {
+            return;
+        };
+        let id = *id;
+        if matches!(key.code, KeyCode::Char('y' | 'Y')) {
+            self.playlists.send(playlists::Command::Delete(id));
+        }
+        self.mode = Mode::Normal;
+    }
+
+    fn key_pick(&mut self, key: KeyEvent) {
+        let count = self.playlist_data.len();
+        let Mode::Pick { track_id, state } = &mut self.mode else {
+            return;
+        };
+        match key.code {
+            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Down | KeyCode::Char('j') => {
+                let next = (state.selected().unwrap_or(0) + 1).min(count.saturating_sub(1));
+                state.select(Some(next));
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                state.select(Some(state.selected().unwrap_or(0).saturating_sub(1)));
+            }
+            KeyCode::Enter => {
+                let track = *track_id;
+                let chosen = state
+                    .selected()
+                    .and_then(|i| self.playlist_data.get(i))
+                    .map(|p| p.id);
+                self.mode = Mode::Normal;
+                if let Some(id) = chosen {
+                    self.playlists.send(playlists::Command::Add {
+                        target: Target::Playlist(id),
+                        track,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{Db, TrackRecord};
+    use crate::library::LibraryEvent;
+    use crate::paths::Paths;
+    use crate::testutil::wav_bytes;
+    use std::sync::mpsc;
+
+    fn key(app: &mut App, code: KeyCode) {
+        app.handle_event(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)));
+    }
+
+    fn type_text(app: &mut App, text: &str) {
+        for c in text.chars() {
+            key(app, KeyCode::Char(c));
+        }
+    }
+
+    /// Draw at several sizes (including tiny ones) to catch layout panics.
+    fn render_all_sizes(app: &mut App) {
+        for (w, h) in [(120, 30), (80, 20), (50, 12), (10, 4), (1, 1)] {
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(w, h)).unwrap();
+            terminal.draw(|f| app.draw(f)).unwrap();
+        }
+    }
+
+    /// Pump background events until `cond` holds (or fail after 5 s).
+    fn wait(app: &mut App, what: &str, cond: impl Fn(&App) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            app.drain_library_events();
+            app.drain_playlist_events();
+            if cond(app) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("timed out waiting for: {what} (status: {})", app.status);
+    }
+
+    #[test]
+    fn playlist_favorites_and_search_flow() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::new(tmp.path().to_path_buf());
+        paths.ensure_dirs().unwrap();
+        let db = Db::open(&paths.db).unwrap();
+        for (file, title) in [("alpha.wav", "Alpha"), ("beta.wav", "Beta")] {
+            std::fs::write(paths.music.join(file), wav_bytes(100)).unwrap();
+            db.upsert_track(&TrackRecord {
+                path: file.into(),
+                size: 1,
+                mtime_ms: 1,
+                title: title.into(),
+                artist: "Band".into(),
+                album: String::new(),
+                duration_ms: 100,
+            })
+            .unwrap();
+        }
+
+        let (lib_tx, lib_rx) = mpsc::channel();
+        let mut app = App::new(
+            &Config::default(),
+            None,
+            lib_rx,
+            playlists::spawn(&paths),
+            paths.music.clone(),
+        );
+        lib_tx
+            .send(LibraryEvent::Tracks(db.tracks().unwrap()))
+            .unwrap();
+        wait(&mut app, "tracks loaded", |a| a.tracks.len() == 2);
+        assert_eq!(
+            app.selected_track().map(|t| t.title.as_str()),
+            Some("Alpha")
+        );
+
+        render_all_sizes(&mut app); // library with tracks
+        // Search narrows the list and Esc brings everything back.
+        key(&mut app, KeyCode::Char('/'));
+        type_text(&mut app, "bet");
+        render_all_sizes(&mut app); // search box
+        assert_eq!(app.view_len(), 1);
+        assert_eq!(app.selected_track().map(|t| t.title.as_str()), Some("Beta"));
+        key(&mut app, KeyCode::Esc);
+        assert_eq!(app.view_len(), 2);
+
+        // Create a playlist on the Playlists tab (typing 'q' must not quit).
+        key(&mut app, KeyCode::Tab);
+        render_all_sizes(&mut app); // empty playlist list
+        key(&mut app, KeyCode::Char('c'));
+        type_text(&mut app, "Quiet mix");
+        render_all_sizes(&mut app); // prompt popup
+        key(&mut app, KeyCode::Enter);
+        wait(&mut app, "playlist created", |a| a.playlist_data.len() == 1);
+        assert!(!app.should_quit);
+        assert!(paths.playlists.join("Quiet mix").is_dir());
+
+        // Favorite the first track from the Library tab.
+        key(&mut app, KeyCode::BackTab);
+        key(&mut app, KeyCode::Char('f'));
+        wait(&mut app, "favorite added", |a| a.favorites.len() == 1);
+        assert!(paths.favorites.join("alpha.wav").is_file());
+
+        // Add the second track to the playlist through the picker.
+        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Char('a'));
+        render_all_sizes(&mut app); // picker popup
+        key(&mut app, KeyCode::Enter);
+        wait(&mut app, "track in playlist", |a| {
+            a.playlist_data.first().is_some_and(|p| p.tracks.len() == 1)
+        });
+        assert!(paths.playlists.join("Quiet mix").join("beta.wav").is_file());
+
+        // Open the playlist, remove the track again.
+        key(&mut app, KeyCode::Tab);
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(app.view_len(), 1);
+        key(&mut app, KeyCode::Char('d'));
+        wait(&mut app, "track removed", |a| {
+            a.playlist_data.first().is_some_and(|p| p.tracks.is_empty())
+        });
+        assert!(!paths.playlists.join("Quiet mix").join("beta.wav").exists());
+        assert!(paths.music.join("beta.wav").is_file());
+
+        // Delete the playlist only after confirming.
+        key(&mut app, KeyCode::Esc);
+        key(&mut app, KeyCode::Char('d'));
+        render_all_sizes(&mut app); // confirm popup
+        key(&mut app, KeyCode::Char('n'));
+        assert_eq!(app.playlist_data.len(), 1, "cancelled");
+        key(&mut app, KeyCode::Char('d'));
+        key(&mut app, KeyCode::Char('y'));
+        wait(&mut app, "playlist deleted", |a| a.playlist_data.is_empty());
+        assert!(!paths.playlists.join("Quiet mix").exists());
     }
 }

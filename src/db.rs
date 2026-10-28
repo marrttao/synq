@@ -16,7 +16,8 @@ pub enum DbError {
 pub type DbResult<T> = Result<T, DbError>;
 
 /// Each entry upgrades the schema by one version. Never edit old entries.
-const MIGRATIONS: &[&str] = &[r#"
+const MIGRATIONS: &[&str] = &[
+    r#"
 CREATE TABLE tracks (
     id          INTEGER PRIMARY KEY,
     path        TEXT NOT NULL UNIQUE,   -- relative to music/, '/' separated
@@ -51,7 +52,13 @@ CREATE TABLE settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
-"#];
+"#,
+    // 2: name of the hard link (or copy) inside the playlist / favorites folder.
+    r#"
+ALTER TABLE playlist_tracks ADD COLUMN link_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE favorites ADD COLUMN link_name TEXT NOT NULL DEFAULT '';
+"#,
+];
 
 /// A track as stored in the database.
 #[derive(Debug, Clone, PartialEq)]
@@ -63,6 +70,17 @@ pub struct Track {
     pub artist: String,
     pub album: String,
     pub duration_ms: u64,
+    pub missing: bool,
+}
+
+/// A track's membership in a playlist or in favorites.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LinkEntry {
+    pub track_id: i64,
+    /// File name of the hard link inside the collection's folder ("" if unset).
+    pub link_name: String,
+    /// Source file, relative to music/.
+    pub rel_path: String,
     pub missing: bool,
 }
 
@@ -203,6 +221,162 @@ impl Db {
                 album: r.get(4)?,
                 duration_ms: r.get::<_, i64>(5)? as u64,
                 missing: r.get::<_, i64>(6)? != 0,
+            })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Library path (relative to music/) and missing flag of a track.
+    pub fn track_file(&self, id: i64) -> DbResult<Option<(String, bool)>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT path, missing FROM tracks WHERE id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get::<_, i64>(1)? != 0)),
+            )
+            .optional()?)
+    }
+
+    // ---- playlists ------------------------------------------------------
+
+    pub fn create_playlist(&self, name: &str) -> DbResult<i64> {
+        self.conn
+            .execute("INSERT INTO playlists (name) VALUES (?1)", [name])?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn rename_playlist(&self, id: i64, name: &str) -> DbResult<()> {
+        self.conn.execute(
+            "UPDATE playlists SET name = ?1 WHERE id = ?2",
+            params![name, id],
+        )?;
+        Ok(())
+    }
+
+    /// Removes the playlist and (by cascade) its track links.
+    pub fn delete_playlist(&self, id: i64) -> DbResult<()> {
+        self.conn
+            .execute("DELETE FROM playlists WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    pub fn playlists(&self) -> DbResult<Vec<(i64, String)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name FROM playlists ORDER BY name COLLATE NOCASE, id")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    pub fn playlist_name(&self, id: i64) -> DbResult<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT name FROM playlists WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .optional()?)
+    }
+
+    /// Entries of a playlist in play order.
+    pub fn playlist_entries(&self, playlist: i64) -> DbResult<Vec<LinkEntry>> {
+        self.link_entries(
+            "SELECT pt.track_id, pt.link_name, t.path, t.missing
+             FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id
+             WHERE pt.playlist_id = ?1 ORDER BY pt.position, pt.track_id",
+            params![playlist],
+        )
+    }
+
+    /// Returns false when the track was already in the playlist.
+    pub fn playlist_add(&self, playlist: i64, track: i64, link_name: &str) -> DbResult<bool> {
+        let n = self.conn.execute(
+            "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position, link_name)
+             VALUES (?1, ?2, COALESCE((SELECT MAX(position) + 1 FROM playlist_tracks
+                                       WHERE playlist_id = ?1), 0), ?3)",
+            params![playlist, track, link_name],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Returns the link name of the removed entry, if there was one.
+    pub fn playlist_remove(&self, playlist: i64, track: i64) -> DbResult<Option<String>> {
+        let name = self
+            .conn
+            .query_row(
+                "SELECT link_name FROM playlist_tracks WHERE playlist_id = ?1 AND track_id = ?2",
+                params![playlist, track],
+                |r| r.get(0),
+            )
+            .optional()?;
+        self.conn.execute(
+            "DELETE FROM playlist_tracks WHERE playlist_id = ?1 AND track_id = ?2",
+            params![playlist, track],
+        )?;
+        Ok(name)
+    }
+
+    pub fn set_playlist_link_name(&self, playlist: i64, track: i64, name: &str) -> DbResult<()> {
+        self.conn.execute(
+            "UPDATE playlist_tracks SET link_name = ?3 WHERE playlist_id = ?1 AND track_id = ?2",
+            params![playlist, track, name],
+        )?;
+        Ok(())
+    }
+
+    // ---- favorites ------------------------------------------------------
+
+    pub fn favorite_entries(&self) -> DbResult<Vec<LinkEntry>> {
+        self.link_entries(
+            "SELECT f.track_id, f.link_name, t.path, t.missing
+             FROM favorites f JOIN tracks t ON t.id = f.track_id
+             ORDER BY f.added_at, f.track_id",
+            [],
+        )
+    }
+
+    /// Returns false when the track was already a favorite.
+    pub fn favorite_add(&self, track: i64, link_name: &str) -> DbResult<bool> {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as i64);
+        let n = self.conn.execute(
+            "INSERT OR IGNORE INTO favorites (track_id, added_at, link_name) VALUES (?1, ?2, ?3)",
+            params![track, now_ms, link_name],
+        )?;
+        Ok(n > 0)
+    }
+
+    pub fn favorite_remove(&self, track: i64) -> DbResult<Option<String>> {
+        let name = self
+            .conn
+            .query_row(
+                "SELECT link_name FROM favorites WHERE track_id = ?1",
+                [track],
+                |r| r.get(0),
+            )
+            .optional()?;
+        self.conn
+            .execute("DELETE FROM favorites WHERE track_id = ?1", [track])?;
+        Ok(name)
+    }
+
+    pub fn set_favorite_link_name(&self, track: i64, name: &str) -> DbResult<()> {
+        self.conn.execute(
+            "UPDATE favorites SET link_name = ?2 WHERE track_id = ?1",
+            params![track, name],
+        )?;
+        Ok(())
+    }
+
+    fn link_entries(&self, sql: &str, p: impl rusqlite::Params) -> DbResult<Vec<LinkEntry>> {
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map(p, |r| {
+            Ok(LinkEntry {
+                track_id: r.get(0)?,
+                link_name: r.get(1)?,
+                rel_path: r.get(2)?,
+                missing: r.get::<_, i64>(3)? != 0,
             })
         })?;
         Ok(rows.collect::<Result<_, _>>()?)
