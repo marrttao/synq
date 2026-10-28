@@ -81,13 +81,13 @@ impl App {
                 self.status = "Colors not saved".into();
                 return;
             }
-            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
+            KeyCode::Down | KeyCode::Tab => {
                 *selected = (*selected + 1).min(last);
             }
-            KeyCode::Up | KeyCode::Char('k') | KeyCode::BackTab => {
+            KeyCode::Up | KeyCode::BackTab => {
                 *selected = selected.saturating_sub(1);
             }
-            KeyCode::Enter | KeyCode::Char('e') => {
+            KeyCode::Enter => {
                 *typing = Some(
                     hex(draft.colors[*selected])
                         .trim_start_matches('#')
@@ -112,9 +112,9 @@ impl App {
                     self.status = format!("At least {MIN_COLORS} colors");
                 }
             }
-            KeyCode::Char('s') => return self.finish_palette_edit(false),
-            KeyCode::Char('n') => return self.finish_palette_edit(true),
-            KeyCode::Char('D') => {
+            KeyCode::F(2) => return self.finish_palette_edit(false),
+            KeyCode::F(3) => return self.finish_palette_edit(true),
+            KeyCode::F(4) => {
                 let name = draft.name.clone();
                 self.mode = Mode::Normal;
                 self.status = match self.palettes.delete(&name) {
@@ -194,7 +194,7 @@ impl App {
         let hint = if typing.is_some() {
             "Type 6 hex digits, Enter: set, Esc: back"
         } else {
-            "Enter: edit  +: add color  -: remove  s: save  n: save as new  D: delete  Esc: cancel"
+            "Enter: type a color  +: add  -: remove  F2: save  F3: save as new  F4: delete  Esc: cancel"
         };
         lines.push(Line::styled(hint, Style::new().fg(self.theme.dim)));
         f.render_widget(

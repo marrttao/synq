@@ -46,21 +46,17 @@ impl App {
             return;
         };
         let module = Module::ALL[*selected % Module::ALL.len()];
-        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-        // (dx, dy) of an arrow or vim key, and whether it resizes.
+        // Only arrows (and function keys below) are used, so that nothing
+        // here can be mistaken for the player's own keys. Shift or Ctrl
+        // with an arrow resizes instead of moving.
+        let resize = key
+            .modifiers
+            .intersects(KeyModifiers::SHIFT | KeyModifiers::CONTROL);
         let direction = match key.code {
-            KeyCode::Left => Some((-STEP, 0, shift)),
-            KeyCode::Right => Some((STEP, 0, shift)),
-            KeyCode::Up => Some((0, -STEP, shift)),
-            KeyCode::Down => Some((0, STEP, shift)),
-            KeyCode::Char('h') => Some((-STEP, 0, false)),
-            KeyCode::Char('l') => Some((STEP, 0, false)),
-            KeyCode::Char('k') => Some((0, -STEP, false)),
-            KeyCode::Char('j') => Some((0, STEP, false)),
-            KeyCode::Char('H') => Some((-STEP, 0, true)),
-            KeyCode::Char('L') => Some((STEP, 0, true)),
-            KeyCode::Char('K') => Some((0, -STEP, true)),
-            KeyCode::Char('J') => Some((0, STEP, true)),
+            KeyCode::Left => Some((-STEP, 0, resize)),
+            KeyCode::Right => Some((STEP, 0, resize)),
+            KeyCode::Up => Some((0, -STEP, resize)),
+            KeyCode::Down => Some((0, STEP, resize)),
             _ => None,
         };
         if let Some((dx, dy, resize)) = direction {
@@ -90,13 +86,13 @@ impl App {
                     p.resized(-STEP, -STEP);
                 }
             }
-            KeyCode::Char(' ' | 'x') | KeyCode::Delete => match draft.place_mut(module) {
+            KeyCode::Char(' ') => match draft.place_mut(module) {
                 Some(p) => p.visible = !p.visible,
                 None => draft.player = !draft.player,
             },
-            KeyCode::Enter | KeyCode::Char('s') => self.finish_layout_edit(false),
-            KeyCode::Char('n') => self.finish_layout_edit(true),
-            KeyCode::Char('D') => {
+            KeyCode::Enter | KeyCode::F(2) => self.finish_layout_edit(false),
+            KeyCode::F(3) => self.finish_layout_edit(true),
+            KeyCode::F(4) => {
                 let name = draft.name.clone();
                 self.mode = Mode::Normal;
                 self.status = match self.layouts.delete(&name) {
@@ -166,11 +162,11 @@ impl App {
         let player = if draft.player { "shown" } else { "hidden" };
         let text = vec![
             Line::from(format!(
-                "Tab: panel ({})   arrows: move   Shift+arrows or HJKL: resize   +/-: scale   Space: show/hide",
+                "Tab: panel ({})   arrows: move   Shift+arrows: resize   +/-: scale   Space: show/hide",
                 module.label()
             )),
             Line::from(format!(
-                "s: save   n: save as new   D: delete   Esc: cancel   (player bar {player})"
+                "Enter: save   F3: save as new   F4: delete   Esc: cancel   (player bar {player})"
             )),
         ];
         f.render_widget(

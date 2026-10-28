@@ -247,7 +247,7 @@ fn the_editor_moves_resizes_hides_and_saves_a_new_layout() {
         screen_text(&mut app, w, h);
     }
 
-    key(&mut app, KeyCode::Char('s'));
+    key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::Normal));
     assert_eq!(app.layouts.current().name, "Custom 1");
     assert!(!app.layouts.current().player);
@@ -260,17 +260,17 @@ fn the_editor_moves_resizes_hides_and_saves_a_new_layout() {
     // Editing a saved layout and "save as new" keeps the first one.
     key(&mut app, KeyCode::Char('E'));
     key(&mut app, KeyCode::Char('+'));
-    key(&mut app, KeyCode::Char('n'));
+    key(&mut app, KeyCode::F(3));
     assert_eq!(app.layouts.current().name, "Custom 2");
     assert!(app.layouts.exists_custom("Custom 1"));
 
     // Esc discards; D deletes.
     key(&mut app, KeyCode::Char('E'));
-    key(&mut app, KeyCode::Char('l'));
+    key(&mut app, KeyCode::Right);
     key(&mut app, KeyCode::Esc);
     assert!(app.status.contains("not saved"));
     key(&mut app, KeyCode::Char('E'));
-    key(&mut app, KeyCode::Char('D'));
+    key(&mut app, KeyCode::F(4));
     assert!(!app.layouts.exists_custom("Custom 2"));
     assert_eq!(app.layouts.current().name, "Classic");
 }
@@ -280,7 +280,7 @@ fn editing_a_built_in_layout_never_changes_it() {
     let (_tmp, _paths, mut app) = setup_with_db();
     let before = app.layouts.current().clone();
     key(&mut app, KeyCode::Char('E'));
-    key(&mut app, KeyCode::Char('K'));
+    press(&mut app, KeyCode::Up, KeyModifiers::SHIFT);
     key(&mut app, KeyCode::Esc);
     assert_eq!(app.layouts.current(), &before);
 }
@@ -368,7 +368,7 @@ fn the_color_editor_sets_any_number_of_colors_and_shows_them_live() {
     };
     assert_eq!(draft.colors.len(), 12);
 
-    key(&mut app, KeyCode::Char('s'));
+    key(&mut app, KeyCode::F(2));
     assert!(matches!(app.mode, Mode::Normal));
     assert_eq!(app.palettes.current().name, "Mine 1");
     let (again, _) = PaletteSet::load(paths.db.clone(), "default");
@@ -388,4 +388,50 @@ fn leaving_the_color_editor_with_esc_restores_the_colors() {
     key(&mut app, KeyCode::Esc);
     assert_eq!(app.theme.background, before);
     assert!(app.palettes.current().colors.len() == 5 && !app.palettes.current().custom);
+}
+
+#[test]
+fn player_keys_do_nothing_inside_the_editors() {
+    let (_tmp, paths, app) = setup_with_palettes();
+    let (layouts, _) = LayoutSet::load(paths.db.clone());
+    let mut app = app.with_layouts(layouts);
+    let before = app.layouts.current().clone();
+    key(&mut app, KeyCode::Char('E'));
+    let Mode::LayoutEdit { draft: start, .. } = &app.mode else {
+        panic!("editing")
+    };
+    let start = start.clone();
+    // Letters that are player keys (and used to be editor keys) change nothing.
+    for c in "hjklHJKLnsxDvFR".chars() {
+        key(&mut app, KeyCode::Char(c));
+    }
+    let Mode::LayoutEdit { draft, .. } = &app.mode else {
+        panic!("still editing")
+    };
+    assert_eq!(draft, &start);
+    assert!(!app.fullscreen);
+    // Ctrl+arrow resizes like Shift+arrow.
+    press(&mut app, KeyCode::Left, KeyModifiers::CONTROL);
+    let Mode::LayoutEdit { draft, .. } = &app.mode else {
+        panic!("still editing")
+    };
+    assert_eq!(draft.places[0].w, start.places[0].w - 2);
+    key(&mut app, KeyCode::Esc);
+    assert_eq!(app.layouts.current(), &before);
+
+    key(&mut app, KeyCode::Char('C'));
+    let colors = app.palettes.current().colors.clone();
+    for c in "jkesnD".chars() {
+        key(&mut app, KeyCode::Char(c));
+    }
+    let Mode::PaletteEdit {
+        draft,
+        selected,
+        typing,
+    } = &app.mode
+    else {
+        panic!("editing colors")
+    };
+    assert_eq!(draft.colors, colors);
+    assert_eq!((*selected, typing.is_none()), (0, true));
 }
