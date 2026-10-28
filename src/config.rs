@@ -32,6 +32,8 @@ pub struct Config {
 pub struct UiConfig {
     /// Enable fade-in / scroll / highlight animations.
     pub animations: bool,
+    /// How solid the dark backdrop behind the lyrics is, 0-100 percent.
+    pub lyrics_backdrop: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -89,7 +91,10 @@ pub struct VisualsConfig {
 
 impl Default for UiConfig {
     fn default() -> Self {
-        Self { animations: true }
+        Self {
+            animations: true,
+            lyrics_backdrop: 80,
+        }
     }
 }
 
@@ -148,6 +153,8 @@ pub const DEFAULT_TOML: &str = r##"# synq settings. Delete a line to get its def
 [ui]
 # Fade-in / scroll / highlight animations.
 animations = true
+# Dark backdrop behind the lyrics over a picture, 0 (none) - 100 (solid).
+lyrics_backdrop = 80
 
 [theme]
 # Built-in colors: default / nord / gruvbox / light / mono (press T to try them).

@@ -111,7 +111,7 @@ fn v_cycles_picture_blocks_and_ascii() {
 }
 
 #[test]
-fn a_pixel_picture_under_another_panel_is_drawn_as_blocks() {
+fn pixel_pictures_fall_back_to_the_better_blocks_when_they_cannot_be_used() {
     // Pixel graphics would cover the text lying over them.
     assert_eq!(
         VisualMode::Picture.effective(true, true),
@@ -121,9 +121,10 @@ fn a_pixel_picture_under_another_panel_is_drawn_as_blocks() {
         VisualMode::Picture.effective(false, true),
         VisualMode::Picture
     );
+    // No graphics protocol at all: blocks are finer than half blocks.
     assert_eq!(
-        VisualMode::Picture.effective(true, false),
-        VisualMode::Picture
+        VisualMode::Picture.effective(false, false),
+        VisualMode::Blocks
     );
     assert_eq!(VisualMode::Ascii.effective(true, true), VisualMode::Ascii);
     assert_eq!(VisualMode::from_config("blocks"), VisualMode::Blocks);
@@ -675,4 +676,30 @@ fn lyrics_placed_over_the_picture_are_drawn_over_it() {
     assert!(t.contains("Lyrics"), "the lyrics stay visible");
     assert!(!t.contains("Visual"), "the picture is under them");
     let _: &Layout = &l;
+}
+
+#[test]
+fn the_lyrics_have_a_dark_backdrop_over_the_picture() {
+    use ratatui::style::Color;
+    let (_tmp, paths, mut app) = setup_with_db();
+    std::fs::write(paths.gifs.join("a.gif"), gif()).unwrap();
+    pump(&mut app, "picture", |a| a.visual.active.is_some());
+    // Lyrics on top of the whole Visual panel.
+    let mut l = app.layouts.current().frozen(120);
+    l.name = "Over".into();
+    l.places[0].visible = false;
+    l.places[2] = l.places[1];
+    app.layouts.save(l).unwrap();
+    app.visual.mode = VisualMode::Blocks;
+    let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
+    t.draw(|f| app.draw(f)).unwrap();
+    let buf = t.backend().buffer().clone();
+    // The picture is pure red; behind the lyrics it is darkened towards the
+    // background, but still there (80% backdrop).
+    let inside = &buf[(60, 12)];
+    let Color::Rgb(r, g, b) = inside.bg else {
+        panic!("rgb background")
+    };
+    assert!(r < 120 && r > 20, "darkened, not solid: {r}");
+    assert!(g < 60 && b < 60, "{g} {b}");
 }

@@ -53,7 +53,17 @@ fn main() -> Result<()> {
     let status = status
         .or(keys_problem)
         .or(layouts_problem)
-        .or(palettes_problem);
+        .or(palettes_problem)
+        // Started from another folder, `synq` would otherwise look empty
+        // without any explanation.
+        .or_else(|| {
+            std::env::var_os(paths::HOME_ENV).is_none().then(|| {
+                format!(
+                    "Library folder: {} (another one: setx PLAYER_HOME \"folder\")",
+                    paths.base.display()
+                )
+            })
+        });
     let hotkeys = hotkeys::Hotkeys::spawn();
     let playlists = playlists::spawn(&paths);
     let lyrics = lyrics::spawn(paths.db.clone(), paths.lyrics.clone(), config.lyrics.online);

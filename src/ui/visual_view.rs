@@ -12,12 +12,13 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{ListState, Paragraph, Wrap};
-use ratatui_image::picker::{Picker, ProtocolType};
+use ratatui_image::picker::ProtocolType;
 use ratatui_image::protocol::StatefulProtocol;
 use ratatui_image::{Resize, StatefulImage};
 
 use crate::visuals::{self, Animation, Clock, Command, Event};
 
+use super::blocks;
 use super::{App, Mode, View};
 
 /// Decoded pictures kept besides the one on screen (e.g. other playlists').
@@ -100,9 +101,11 @@ impl VisualMode {
     }
 
     /// Pixel graphics are drawn after all text, so a panel lying over the
-    /// picture would be hidden by it: then blocks are used instead.
+    /// picture would be hidden by it; and without a graphics protocol the
+    /// terminal would only get the coarse half blocks. Both are the job of
+    /// the (better) blocks mode.
     pub(super) fn effective(self, overlapped: bool, graphics: bool) -> Self {
-        if self == Self::Picture && overlapped && graphics {
+        if self == Self::Picture && (overlapped || !graphics) {
             Self::Blocks
         } else {
             self
@@ -111,7 +114,7 @@ impl VisualMode {
 }
 
 /// Brightness ramp for the ASCII mode, dark to light.
-const RAMP: &[u8] = b" .,:;i1tfLCG08@";
+const RAMP: &[u8] = br#" .'`^",:;Il!i><~+_-?][}{1)(|\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$"#;
 
 pub(super) struct Active {
     name: String,
@@ -122,7 +125,7 @@ pub(super) struct Active {
     /// Panel size (cells) the caches below were made for.
     sized_for: (u16, u16, VisualFit),
     protocols: Vec<Option<StatefulProtocol>>,
-    block_protocols: Vec<Option<StatefulProtocol>>,
+    block_grids: Vec<Option<blocks::Grid>>,
     ascii: Vec<Option<Vec<Line<'static>>>>,
 }
 
@@ -137,7 +140,7 @@ impl Active {
         Self {
             name,
             protocols: (0..images.len()).map(|_| None).collect(),
-            block_protocols: (0..images.len()).map(|_| None).collect(),
+            block_grids: (0..images.len()).map(|_| None).collect(),
             ascii: vec![None; images.len()],
             images,
             delays,
@@ -150,7 +153,7 @@ impl Active {
         if self.sized_for != size {
             self.sized_for = size;
             self.protocols.iter_mut().for_each(|p| *p = None);
-            self.block_protocols.iter_mut().for_each(|p| *p = None);
+            self.block_grids.iter_mut().for_each(|p| *p = None);
             self.ascii.iter_mut().for_each(|a| *a = None);
         }
     }
@@ -175,34 +178,63 @@ fn scaled(image: &DynamicImage, w: u32, h: u32, fit: VisualFit) -> DynamicImage 
     }
 }
 
-/// One text line per panel row, `cols` characters wide.
+/// One text line per panel row, `cols` characters wide. The character
+/// follows the brightness (stretched to the picture's own range), its color
+/// is the pixel's and the cell background is a dark shade of it.
 fn ascii_lines(image: &DynamicImage, cols: u16, rows: u16, fit: VisualFit) -> Vec<Line<'static>> {
     // A character cell is about twice as tall as it is wide.
     let img = scaled(image, u32::from(cols), u32::from(rows) * 2, fit).to_rgba8();
+    let luma =
+        |c: [u8; 3]| (u32::from(c[0]) * 299 + u32::from(c[1]) * 587 + u32::from(c[2]) * 114) / 1000;
+    let cell = |col: u32, row: u32| -> ([u8; 3], u32) {
+        let (mut sum, mut alpha) = ([0u32; 3], 0u32);
+        for y in [row * 2, row * 2 + 1] {
+            let p = img.get_pixel(col, y.min(img.height() - 1));
+            let a = u32::from(p[3]);
+            for i in 0..3 {
+                sum[i] += u32::from(p[i]) * a / 255;
+            }
+            alpha += a;
+        }
+        (sum.map(|c| (c / 2) as u8), alpha / 2)
+    };
+    let (mut lo, mut hi) = (255u32, 0u32);
+    for row in 0..u32::from(rows) {
+        for col in 0..u32::from(cols) {
+            let (c, alpha) = cell(col, row);
+            if alpha >= 128 {
+                let l = luma(c);
+                lo = lo.min(l);
+                hi = hi.max(l);
+            }
+        }
+    }
     (0..u32::from(rows))
         .map(|row| {
             let spans: Vec<Span<'static>> = (0..u32::from(cols))
                 .map(|col| {
-                    let (mut sum, mut alpha) = ([0u32; 3], 0u32);
-                    for y in [row * 2, row * 2 + 1] {
-                        let p = img.get_pixel(col, y.min(img.height() - 1));
-                        let a = u32::from(p[3]);
-                        for i in 0..3 {
-                            sum[i] += u32::from(p[i]) * a / 255;
-                        }
-                        alpha += a;
-                    }
-                    let [r, g, b] = sum.map(|c| (c / 2) as u8);
-                    let luma =
-                        (u32::from(r) * 299 + u32::from(g) * 587 + u32::from(b) * 114) / 1000;
+                    let (c, alpha) = cell(col, row);
                     let idx = if alpha < 40 {
                         0
                     } else {
-                        (luma as usize * (RAMP.len() - 1) + 127) / 255
+                        // Stretch to the range of this picture, then a gamma that
+                        // gives the dark half more characters.
+                        let l = luma(c);
+                        let t = if hi > lo + 8 {
+                            (l.saturating_sub(lo)) as f32 / (hi - lo) as f32
+                        } else {
+                            l as f32 / 255.0
+                        };
+                        let t = t.clamp(0.0, 1.0).powf(0.8);
+                        (t * (RAMP.len() - 1) as f32).round() as usize
                     };
                     // Very dark pixels would be invisible; lift the color a bit.
-                    let tint = Color::Rgb(r.max(48), g.max(48), b.max(48));
-                    Span::styled(char::from(RAMP[idx]).to_string(), Style::new().fg(tint))
+                    let fg = Color::Rgb(c[0].max(48), c[1].max(48), c[2].max(48));
+                    let bg = Color::Rgb(c[0] / 5, c[1] / 5, c[2] / 5);
+                    Span::styled(
+                        char::from(RAMP[idx]).to_string(),
+                        Style::new().fg(fg).bg(bg),
+                    )
                 })
                 .collect();
             Line::from(spans)
@@ -232,8 +264,6 @@ pub(super) struct VisualState {
     auto: Option<String>,
     pub(super) mode: VisualMode,
     pub(super) fit: VisualFit,
-    /// Half blocks, for the Blocks mode and for pictures under other panels.
-    blocks_picker: Picker,
 }
 
 /// Stored as the global choice when the user picked "(none)", so that the
@@ -241,23 +271,10 @@ pub(super) struct VisualState {
 const NO_PICTURE: &str = "-";
 
 impl VisualState {
-    pub(super) fn new(
-        handle: visuals::Handle,
-        mode: VisualMode,
-        fit: VisualFit,
-        background: [u8; 3],
-    ) -> Self {
-        let mut blocks_picker = Picker::halfblocks();
-        blocks_picker.set_background_color(Some([
-            background[0],
-            background[1],
-            background[2],
-            255,
-        ]));
+    pub(super) fn new(handle: visuals::Handle, mode: VisualMode, fit: VisualFit) -> Self {
         Self {
             mode,
             fit,
-            blocks_picker,
             handle,
             global: None,
             per_playlist: HashMap::new(),
@@ -451,13 +468,26 @@ impl App {
                     });
                     f.render_widget(Paragraph::new(lines.clone()), inner);
                 }
-                VisualMode::Picture | VisualMode::Blocks => {
-                    let (picker, cache) = if mode == VisualMode::Blocks {
-                        (&self.visual.blocks_picker, &mut active.block_protocols)
-                    } else {
-                        (&self.visual.handle.picker, &mut active.protocols)
+                VisualMode::Blocks => {
+                    let bg = match self.theme.background {
+                        Color::Rgb(r, g, b) => [r, g, b],
+                        _ => [0, 0, 0],
                     };
-                    let proto = cache[index].get_or_insert_with(|| {
+                    let grid = active.block_grids[index].get_or_insert_with(|| {
+                        let img = scaled(
+                            &active.images[index],
+                            u32::from(inner.width) * 2,
+                            u32::from(inner.height) * 2,
+                            fit,
+                        )
+                        .to_rgba8();
+                        blocks::quadrants(&img, inner.width, inner.height, bg)
+                    });
+                    blocks::paint(f.buffer_mut(), inner, grid);
+                }
+                VisualMode::Picture => {
+                    let picker = &self.visual.handle.picker;
+                    let proto = active.protocols[index].get_or_insert_with(|| {
                         let font = picker.font_size();
                         let filled = scaled(
                             &active.images[index],

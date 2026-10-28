@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
@@ -32,6 +32,34 @@ pub(super) enum LyricsState {
         /// First visible line of plain lyrics.
         scroll: usize,
     },
+}
+
+/// A dark backdrop for text lying over a picture: whatever is already in
+/// `area` is mixed with the background color, `percent` of the way (100
+/// hides it completely, 0 leaves it alone).
+fn darken_behind(buf: &mut ratatui::buffer::Buffer, area: Rect, bg: Color, percent: u8) {
+    let Color::Rgb(br, bgc, bb) = bg else { return };
+    let mix = |c: Color| match c {
+        Color::Rgb(r, g, b) => {
+            let m = |x: u8, y: u8| {
+                ((u32::from(x) * (100 - u32::from(percent)) + u32::from(y) * u32::from(percent))
+                    / 100) as u8
+            };
+            Color::Rgb(m(r, br), m(g, bgc), m(b, bb))
+        }
+        _ => bg,
+    };
+    let area = area.intersection(buf.area);
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            let cell = &mut buf[(x, y)];
+            if percent >= 100 {
+                cell.set_char(' ');
+            }
+            let (fg, cbg) = (mix(cell.fg), mix(cell.bg));
+            cell.set_fg(fg).set_bg(cbg);
+        }
+    }
 }
 
 impl App {
@@ -204,6 +232,12 @@ impl App {
             },
             _ => "Lyrics".to_owned(),
         };
+        darken_behind(
+            f.buffer_mut(),
+            area,
+            self.theme.background,
+            self.lyrics_backdrop,
+        );
         let block = self.block_n(&title, 2);
         let inner = block.inner(area);
         f.render_widget(block, area);
