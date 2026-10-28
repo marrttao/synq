@@ -133,6 +133,22 @@ mod tests {
     use std::fs;
     use std::time::Instant;
 
+    #[test]
+    fn a_corrupt_database_is_reported_not_fatal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let music = tmp.path().join("music");
+        fs::create_dir(&music).unwrap();
+        let db = tmp.path().join("library.db");
+        fs::write(
+            &db,
+            b"this is not a database, just text padding padding padding",
+        )
+        .unwrap();
+        let rx = spawn(music, db);
+        let ev = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert!(matches!(ev, LibraryEvent::Error(m) if m.starts_with("database")));
+    }
+
     /// Wait for a `Tracks` snapshot satisfying `pred`.
     fn wait_for(rx: &Receiver<LibraryEvent>, pred: impl Fn(&[Track]) -> bool) -> bool {
         let deadline = Instant::now() + Duration::from_secs(10);
