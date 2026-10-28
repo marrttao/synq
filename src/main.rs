@@ -1,4 +1,6 @@
 mod config;
+mod db;
+mod library;
 mod paths;
 mod ui;
 
@@ -33,7 +35,8 @@ fn main() -> Result<()> {
     // after restoring the terminal.
     install_panic_logger();
     let mut terminal = ratatui::try_init().context("cannot initialize the terminal")?;
-    let result = ui::App::new(&config, status).run(&mut terminal);
+    let library_rx = library::spawn(paths.music.clone(), paths.db.clone());
+    let result = ui::App::new(&config, status, library_rx).run(&mut terminal);
     ratatui::restore();
 
     if let Err(e) = &result {

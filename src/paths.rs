@@ -17,7 +17,6 @@ pub struct Paths {
     pub playlists: PathBuf,
     pub favorites: PathBuf,
     pub data: PathBuf,
-    #[allow(dead_code)] // used from stage 2 (library database)
     pub db: PathBuf,
     pub lyrics: PathBuf,
     pub models: PathBuf,
