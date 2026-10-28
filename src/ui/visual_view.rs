@@ -12,6 +12,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{ListState, Paragraph, Wrap};
+use ratatui_image::picker::{Picker, ProtocolType};
 use ratatui_image::protocol::StatefulProtocol;
 use ratatui_image::{Resize, StatefulImage};
 
@@ -27,8 +28,11 @@ const MAX_STEP: Duration = Duration::from_millis(250);
 /// How the picture is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum VisualMode {
-    /// Real pixels where the terminal can, half blocks otherwise.
+    /// Real pixels where the terminal can (sixel, kitty, iTerm2). Sharp,
+    /// but heavy for the terminal, and text cannot be drawn over it.
     Picture,
+    /// Half-block characters: smooth, and other panels can lie over it.
+    Blocks,
     /// Characters picked by brightness, tinted with the pixel color.
     Ascii,
 }
@@ -72,10 +76,36 @@ impl VisualFit {
 
 impl VisualMode {
     pub(super) fn from_config(name: &str) -> Self {
-        if name.trim().eq_ignore_ascii_case("ascii") {
-            Self::Ascii
+        match name.trim().to_lowercase().as_str() {
+            "ascii" => Self::Ascii,
+            "blocks" | "halfblocks" => Self::Blocks,
+            _ => Self::Picture,
+        }
+    }
+
+    pub(super) fn cycle(self) -> Self {
+        match self {
+            Self::Picture => Self::Blocks,
+            Self::Blocks => Self::Ascii,
+            Self::Ascii => Self::Picture,
+        }
+    }
+
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Picture => "Picture mode (pixels)",
+            Self::Blocks => "Blocks mode (smooth)",
+            Self::Ascii => "ASCII mode",
+        }
+    }
+
+    /// Pixel graphics are drawn after all text, so a panel lying over the
+    /// picture would be hidden by it: then blocks are used instead.
+    pub(super) fn effective(self, overlapped: bool, graphics: bool) -> Self {
+        if self == Self::Picture && overlapped && graphics {
+            Self::Blocks
         } else {
-            Self::Picture
+            self
         }
     }
 }
@@ -92,6 +122,7 @@ pub(super) struct Active {
     /// Panel size (cells) the caches below were made for.
     sized_for: (u16, u16, VisualFit),
     protocols: Vec<Option<StatefulProtocol>>,
+    block_protocols: Vec<Option<StatefulProtocol>>,
     ascii: Vec<Option<Vec<Line<'static>>>>,
 }
 
@@ -106,6 +137,7 @@ impl Active {
         Self {
             name,
             protocols: (0..images.len()).map(|_| None).collect(),
+            block_protocols: (0..images.len()).map(|_| None).collect(),
             ascii: vec![None; images.len()],
             images,
             delays,
@@ -118,6 +150,7 @@ impl Active {
         if self.sized_for != size {
             self.sized_for = size;
             self.protocols.iter_mut().for_each(|p| *p = None);
+            self.block_protocols.iter_mut().for_each(|p| *p = None);
             self.ascii.iter_mut().for_each(|a| *a = None);
         }
     }
@@ -199,6 +232,8 @@ pub(super) struct VisualState {
     auto: Option<String>,
     pub(super) mode: VisualMode,
     pub(super) fit: VisualFit,
+    /// Half blocks, for the Blocks mode and for pictures under other panels.
+    blocks_picker: Picker,
 }
 
 /// Stored as the global choice when the user picked "(none)", so that the
@@ -206,10 +241,23 @@ pub(super) struct VisualState {
 const NO_PICTURE: &str = "-";
 
 impl VisualState {
-    pub(super) fn new(handle: visuals::Handle, mode: VisualMode, fit: VisualFit) -> Self {
+    pub(super) fn new(
+        handle: visuals::Handle,
+        mode: VisualMode,
+        fit: VisualFit,
+        background: [u8; 3],
+    ) -> Self {
+        let mut blocks_picker = Picker::halfblocks();
+        blocks_picker.set_background_color(Some([
+            background[0],
+            background[1],
+            background[2],
+            255,
+        ]));
         Self {
             mode,
             fit,
+            blocks_picker,
             handle,
             global: None,
             per_playlist: HashMap::new(),
@@ -376,7 +424,8 @@ impl App {
         }
     }
 
-    pub(super) fn draw_visual(&mut self, f: &mut Frame, area: Rect) {
+    /// `overlapped`: another panel lies over this one.
+    pub(super) fn draw_visual(&mut self, f: &mut Frame, area: Rect, overlapped: bool) {
         let title = match &self.visual.active {
             Some(a) => format!("Visual: {}", a.name),
             None => "Visual".to_owned(),
@@ -387,7 +436,9 @@ impl App {
         if inner.width == 0 || inner.height == 0 {
             return;
         }
-        let (mode, fit) = (self.visual.mode, self.visual.fit);
+        let graphics = self.visual.handle.picker.protocol_type() != ProtocolType::Halfblocks;
+        let mode = self.visual.mode.effective(overlapped, graphics);
+        let fit = self.visual.fit;
         if let Some(active) = &mut self.visual.active
             && !active.images.is_empty()
         {
@@ -400,9 +451,13 @@ impl App {
                     });
                     f.render_widget(Paragraph::new(lines.clone()), inner);
                 }
-                VisualMode::Picture => {
-                    let picker = &self.visual.handle.picker;
-                    let proto = active.protocols[index].get_or_insert_with(|| {
+                VisualMode::Picture | VisualMode::Blocks => {
+                    let (picker, cache) = if mode == VisualMode::Blocks {
+                        (&self.visual.blocks_picker, &mut active.block_protocols)
+                    } else {
+                        (&self.visual.handle.picker, &mut active.protocols)
+                    };
+                    let proto = cache[index].get_or_insert_with(|| {
                         let font = picker.font_size();
                         let filled = scaled(
                             &active.images[index],

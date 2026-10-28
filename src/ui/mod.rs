@@ -264,6 +264,7 @@ impl App {
                 visuals,
                 VisualMode::from_config(&config.visuals.mode),
                 VisualFit::from_config(&config.visuals.fit),
+                background_rgb(&config.theme),
             ),
             fx: Effects::new(config.ui.animations),
             fullscreen: false,

@@ -99,13 +99,36 @@ fn refresh_asks_for_a_rescan_and_notices_new_pictures() {
 }
 
 #[test]
-fn v_switches_between_picture_and_ascii() {
+fn v_cycles_picture_blocks_and_ascii() {
     let (_tmp, _paths, mut app, _r) = setup();
     assert_eq!(app.visual.mode, VisualMode::Picture);
+    key(&mut app, KeyCode::Char('v'));
+    assert_eq!(app.visual.mode, VisualMode::Blocks);
     key(&mut app, KeyCode::Char('v'));
     assert_eq!(app.visual.mode, VisualMode::Ascii);
     key(&mut app, KeyCode::Char('v'));
     assert_eq!(app.visual.mode, VisualMode::Picture);
+}
+
+#[test]
+fn a_pixel_picture_under_another_panel_is_drawn_as_blocks() {
+    // Pixel graphics would cover the text lying over them.
+    assert_eq!(
+        VisualMode::Picture.effective(true, true),
+        VisualMode::Blocks
+    );
+    assert_eq!(
+        VisualMode::Picture.effective(false, true),
+        VisualMode::Picture
+    );
+    assert_eq!(
+        VisualMode::Picture.effective(true, false),
+        VisualMode::Picture
+    );
+    assert_eq!(VisualMode::Ascii.effective(true, true), VisualMode::Ascii);
+    assert_eq!(VisualMode::from_config("blocks"), VisualMode::Blocks);
+    assert_eq!(VisualMode::from_config("ASCII"), VisualMode::Ascii);
+    assert_eq!(VisualMode::from_config("x"), VisualMode::Picture);
 }
 
 #[test]

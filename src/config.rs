@@ -79,7 +79,7 @@ pub struct WhisperConfig {
 pub struct VisualsConfig {
     /// Image protocol: auto / kitty / sixel / iterm2 / halfblocks.
     pub protocol: String,
-    /// How the picture is drawn: "picture" or "ascii" (key `v` switches).
+    /// How the picture is drawn: "picture", "blocks" or "ascii" (key `v` switches).
     pub mode: String,
     /// How the picture fits its panel: "fill", "fit" or "stretch" (key V).
     pub fit: String,
@@ -180,7 +180,7 @@ language = "auto"
 [visuals]
 # Image protocol: auto / kitty / sixel / iterm2 / halfblocks.
 protocol = "auto"
-# How the picture is drawn: "picture" or "ascii" (key v switches).
+# How the picture is drawn: "picture" (pixels), "blocks" (smooth) or "ascii" (key v switches).
 mode = "picture"
 # How the picture fits its panel: "fill" (crops), "fit" (whole) or "stretch" (key V).
 fit = "fill"

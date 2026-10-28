@@ -12,7 +12,6 @@ use crate::hotkeys::{self, HotkeyEvent};
 use crate::keys::{Action, Chord};
 use crate::playlists;
 
-use super::visual_view::VisualMode;
 use super::{App, Mode};
 
 impl App {
@@ -53,14 +52,8 @@ impl App {
     }
 
     fn toggle_picture_mode(&mut self) {
-        self.visual.mode = match self.visual.mode {
-            VisualMode::Picture => VisualMode::Ascii,
-            VisualMode::Ascii => VisualMode::Picture,
-        };
-        self.status = match self.visual.mode {
-            VisualMode::Picture => "Picture mode".into(),
-            VisualMode::Ascii => "ASCII mode".into(),
-        };
+        self.visual.mode = self.visual.mode.cycle();
+        self.status = self.visual.mode.label().into();
     }
 
     /// Look at the disk again: new tracks, playlist folders and pictures.

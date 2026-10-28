@@ -47,13 +47,18 @@ impl App {
         let [library, lyrics, visual] = layout.effective(area.width);
         // Bottom to top: the picture, the list, the lyrics. Whatever is
         // placed over another panel is drawn over it, like subtitles.
+        let (lib_rect, lyr_rect) = (library.rect(main), lyrics.rect(main));
         if let Some(r) = visual.rect(main) {
-            self.draw_visual(f, r);
+            let overlapped = [lib_rect, lyr_rect]
+                .into_iter()
+                .flatten()
+                .any(|o| o.intersects(r));
+            self.draw_visual(f, r, overlapped);
         }
-        if let Some(r) = library.rect(main) {
+        if let Some(r) = lib_rect {
             self.draw_browser(f, r);
         }
-        if let Some(r) = lyrics.rect(main) {
+        if let Some(r) = lyr_rect {
             self.draw_lyrics(f, r);
         }
         if layout.player {
@@ -78,7 +83,7 @@ impl App {
             (l, p)
         };
         self.draw_lyrics(f, lyrics);
-        self.draw_visual(f, picture);
+        self.draw_visual(f, picture, false);
 
         let text = match self.now_playing() {
             Some(t) => {
