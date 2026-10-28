@@ -153,7 +153,7 @@ mod tests {
         assert!(wait_for(&rx, |t| t.is_empty()), "initial scan");
 
         let file = music.join("live.wav");
-        fs::write(&file, scan::wav_bytes(300)).unwrap();
+        fs::write(&file, crate::testutil::wav_bytes(300)).unwrap();
         assert!(
             wait_for(&rx, |t| t.len() == 1 && !t[0].missing),
             "new file not detected"

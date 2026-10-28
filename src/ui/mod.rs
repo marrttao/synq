@@ -1,8 +1,10 @@
 //! Terminal UI: application state, layout and the main loop.
 
+mod player;
 mod theme;
 mod tracklist;
 
+use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
@@ -10,13 +12,17 @@ use anyhow::Result;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::widgets::{Block, Borders, List, ListState, Paragraph, Tabs};
+use ratatui::text::Line;
+use ratatui::widgets::{Block, Borders, LineGauge, List, ListState, Paragraph, Tabs};
 use ratatui::{DefaultTerminal, Frame};
 
+use crate::audio::queue::Repeat;
 use crate::config::Config;
 use crate::db::Track;
 use crate::library::LibraryEvent;
+use player::Player;
 use theme::Theme;
+use tracklist::fmt_duration;
 
 /// ~30 frames per second.
 const FRAME: Duration = Duration::from_millis(33);
@@ -33,6 +39,7 @@ pub struct App {
     list_state: ListState,
     scanning: bool,
     tab: usize,
+    player: Player,
 }
 
 impl App {
@@ -40,6 +47,7 @@ impl App {
         config: &Config,
         status: Option<String>,
         library_rx: Receiver<LibraryEvent>,
+        music_dir: PathBuf,
     ) -> Self {
         Self {
             theme: Theme::from_config(&config.theme),
@@ -50,6 +58,7 @@ impl App {
             list_state: ListState::default(),
             scanning: true,
             tab: 0,
+            player: Player::new(&config.audio, music_dir),
         }
     }
 
@@ -57,6 +66,9 @@ impl App {
         let mut next_frame = Instant::now();
         while !self.should_quit {
             self.drain_library_events();
+            if let Some(err) = self.player.poll() {
+                self.status = err;
+            }
             terminal.draw(|f| self.draw(f))?;
             next_frame += FRAME;
             // Wait for input until the next frame is due; keeps ~30 fps
@@ -143,8 +155,46 @@ impl App {
             KeyCode::End => self.list_state.select_last(),
             KeyCode::Tab => self.tab = (self.tab + 1) % TABS.len(),
             KeyCode::BackTab => self.tab = (self.tab + TABS.len() - 1) % TABS.len(),
+            KeyCode::Enter => self.play_selected(),
+            KeyCode::Char(' ') => {
+                if !self.player.toggle_pause() {
+                    self.play_selected();
+                }
+            }
+            KeyCode::Char('n') => self.player.next(),
+            KeyCode::Char('p') => self.player.prev(),
+            KeyCode::Right => self.seek(true),
+            KeyCode::Left => self.seek(false),
+            KeyCode::Char('+' | '=') => self.player.change_volume(true),
+            KeyCode::Char('-') => self.player.change_volume(false),
+            KeyCode::Char('s') => self.player.toggle_shuffle(),
+            KeyCode::Char('r') => self.player.cycle_repeat(),
             _ => {}
         }
+    }
+
+    fn now_playing(&self) -> Option<&Track> {
+        let id = self.player.now_id?;
+        self.tracks.iter().find(|t| t.id == id)
+    }
+
+    fn play_selected(&mut self) {
+        if self.tab != 0 {
+            return;
+        }
+        let Some(selected) = self.list_state.selected() else {
+            return;
+        };
+        if let Err(msg) = self.player.play_from(&self.tracks, selected) {
+            self.status = msg;
+        }
+    }
+
+    fn seek(&mut self, forward: bool) {
+        let duration = self
+            .now_playing()
+            .map_or(Duration::ZERO, |t| Duration::from_millis(t.duration_ms));
+        self.player.seek(forward, duration);
     }
 
     fn draw(&mut self, f: &mut Frame) {
@@ -158,7 +208,7 @@ impl App {
             area,
         );
         let [main, bottom] =
-            Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).areas(area);
+            Layout::vertical([Constraint::Min(3), Constraint::Length(5)]).areas(area);
 
         // Narrow windows collapse side panels.
         let (show_left, show_right) = (area.width >= 70, area.width >= 110);
@@ -182,12 +232,73 @@ impl App {
             f.render_widget(self.block("Visual"), r);
         }
 
+        self.draw_player_bar(f, bottom);
+    }
+
+    /// Bottom panel: now playing, progress, and the state line.
+    fn draw_player_bar(&self, f: &mut Frame, area: Rect) {
+        let block = self.block("synq");
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+        let [title_row, progress_row, state_row] = Layout::vertical([Constraint::Length(1); 3])
+            .flex(ratatui::layout::Flex::Start)
+            .areas(inner);
+
+        let now = self.now_playing();
+        let (icon, title) = match now {
+            Some(t) => (
+                if self.player.paused {
+                    "\u{23F8}"
+                } else {
+                    "\u{25B6}"
+                },
+                format!("{} - {}", t.artist, t.title),
+            ),
+            None => (
+                "\u{25A0}",
+                "Nothing playing (Enter: play selected)".to_owned(),
+            ),
+        };
+        f.render_widget(
+            Paragraph::new(format!("{icon} {title}")).style(Style::new().fg(self.theme.accent)),
+            title_row,
+        );
+
+        let total_ms = now.map_or(0, |t| t.duration_ms);
+        let pos_ms = self.player.position.as_millis() as u64;
+        let ratio = if total_ms == 0 {
+            0.0
+        } else {
+            (pos_ms as f64 / total_ms as f64).clamp(0.0, 1.0)
+        };
+        let label = format!("{} / {}", fmt_duration(pos_ms), fmt_duration(total_ms));
+        f.render_widget(
+            LineGauge::default()
+                .ratio(ratio)
+                .label(Line::from(label))
+                .filled_style(Style::new().fg(self.theme.accent))
+                .unfilled_style(Style::new().fg(self.theme.border))
+                .style(Style::new().fg(self.theme.foreground)),
+            progress_row,
+        );
+
+        let repeat = match self.player.repeat {
+            Repeat::Off => "off",
+            Repeat::All => "all",
+            Repeat::One => "one",
+        };
+        let shuffle = if self.player.shuffle { "on" } else { "off" };
         let scanning = if self.scanning { " | scanning..." } else { "" };
-        let text = format!("{} tracks{scanning} | {}", self.tracks.len(), self.status);
-        let bar = Paragraph::new(text)
-            .style(Style::new().fg(self.theme.dim))
-            .block(self.block("synq"));
-        f.render_widget(bar, bottom);
+        let text = format!(
+            "vol {}% | shuffle {shuffle} | repeat {repeat} | {} tracks{scanning} | {}",
+            (self.player.volume * 100.0).round() as u32,
+            self.tracks.len(),
+            self.status
+        );
+        f.render_widget(
+            Paragraph::new(text).style(Style::new().fg(self.theme.dim)),
+            state_row,
+        );
     }
 
     /// Left panel: tabs plus the track list.
@@ -224,7 +335,11 @@ impl App {
                 body,
             );
         } else {
-            let items = self.tracks.iter().map(|t| tracklist::item(t, &self.theme));
+            let playing = self.player.now_id;
+            let items = self
+                .tracks
+                .iter()
+                .map(|t| tracklist::item(t, &self.theme, playing == Some(t.id)));
             let list = List::new(items).highlight_style(
                 Style::new()
                     .bg(self.theme.accent)

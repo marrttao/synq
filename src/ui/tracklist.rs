@@ -21,16 +21,20 @@ pub fn fmt_duration(ms: u64) -> String {
     }
 }
 
-/// One row: "Artist - Title      m:ss". Missing files are grey and struck out.
-pub fn item<'a>(track: &'a Track, theme: &Theme) -> ListItem<'a> {
+/// One row: "Artist - Title      m:ss". Missing files are grey and struck out;
+/// the track being played gets a marker and the accent color.
+pub fn item<'a>(track: &'a Track, theme: &Theme, playing: bool) -> ListItem<'a> {
     let style = if track.missing {
         Style::new()
             .fg(theme.dim)
             .add_modifier(Modifier::CROSSED_OUT)
+    } else if playing {
+        Style::new().fg(theme.accent).add_modifier(Modifier::BOLD)
     } else {
         Style::new().fg(theme.foreground)
     };
-    let label = format!("{} - {}", track.artist, track.title);
+    let marker = if playing { "\u{25B6} " } else { "  " };
+    let label = format!("{marker}{} - {}", track.artist, track.title);
     let time = fmt_duration(track.duration_ms);
     ListItem::new(Line::from(vec![
         Span::styled(label, style),
