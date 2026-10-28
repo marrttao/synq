@@ -2,8 +2,12 @@
 //! Rendering lives in `draw.rs`.
 
 mod draw;
+mod effects;
+mod help;
 mod lyrics_view;
 mod player;
+#[cfg(test)]
+mod stage8_tests;
 mod theme;
 mod tracklist;
 mod visual_view;
@@ -26,6 +30,7 @@ use crate::lyrics;
 use crate::playlists::{self, PlaylistInfo, Target};
 use crate::transcribe;
 use crate::visuals;
+use effects::Effects;
 use lyrics_view::LyricsState;
 use player::Player;
 use theme::Theme;
@@ -87,11 +92,22 @@ enum Mode {
         playlist: Option<(i64, String)>,
         to_playlist: bool,
     },
+    /// The key list.
+    Help,
     /// Choosing the playlist for a track.
     Pick {
         track_id: i64,
         state: ListState,
     },
+}
+
+/// Keys that make sense while only lyrics and the picture are on screen.
+fn allowed_in_fullscreen(code: KeyCode) -> bool {
+    match code {
+        KeyCode::Char(c) => "qpnsrflgtTF?[]+=- ".contains(c),
+        KeyCode::Left | KeyCode::Right | KeyCode::Esc | KeyCode::Up | KeyCode::Down => true,
+        _ => false,
+    }
 }
 
 /// Background color as bytes, for drawing transparent pictures over it.
@@ -137,6 +153,10 @@ pub struct App {
     lyrics_for: Option<i64>,
     show_lyrics: bool,
     visual: VisualState,
+    fx: Effects,
+    fullscreen: bool,
+    /// Name of the color set in use (for `T`).
+    theme_name: String,
 }
 
 impl App {
@@ -181,6 +201,9 @@ impl App {
             lyrics_for: None,
             show_lyrics: true,
             visual: VisualState::new(visuals),
+            fx: Effects::new(config.ui.animations),
+            fullscreen: false,
+            theme_name: config.theme.preset.clone(),
         }
     }
 
@@ -198,6 +221,7 @@ impl App {
             self.sync_lyrics_request();
             self.tick_whisper();
             self.tick_visuals();
+            self.tick_effects();
             terminal.draw(|f| self.draw(f))?;
             next_frame += FRAME;
             // Wait for input until the next frame is due; keeps ~30 fps
@@ -404,11 +428,15 @@ impl App {
             Mode::Confirm { .. } => self.key_confirm(key),
             Mode::Pick { .. } => self.key_pick(key),
             Mode::GifPick { .. } => self.key_gif_pick(key),
+            Mode::Help => self.mode = Mode::Normal,
             Mode::ConfirmModel { .. } => self.key_confirm_model(key),
         }
     }
 
     fn key_normal(&mut self, key: KeyEvent) {
+        if self.fullscreen && !allowed_in_fullscreen(key.code) {
+            return;
+        }
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Down if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -426,6 +454,7 @@ impl App {
             KeyCode::Tab => self.switch_tab((self.tab + 1) % TABS.len()),
             KeyCode::BackTab => self.switch_tab((self.tab + TABS.len() - 1) % TABS.len()),
             KeyCode::Enter => self.activate(),
+            KeyCode::Esc if self.fullscreen => self.toggle_fullscreen(),
             KeyCode::Esc => self.go_back(true),
             KeyCode::Backspace => self.go_back(false),
             KeyCode::Char('/') => self.mode = Mode::Search,
@@ -449,10 +478,22 @@ impl App {
             KeyCode::Char(']') => self.shift_lyrics(true),
             KeyCode::Char('a') => self.start_pick(),
             KeyCode::Char('g') => self.start_gif_pick(),
+            KeyCode::Char('F') => self.toggle_fullscreen(),
+            KeyCode::Char('?') => self.mode = Mode::Help,
+            KeyCode::Char('T') => self.next_theme(),
             KeyCode::Char('c') => self.start_create(),
             KeyCode::Char('e') => self.start_rename(),
             KeyCode::Char('d') | KeyCode::Delete => self.delete_selected(),
             _ => {}
+        }
+    }
+
+    fn next_theme(&mut self) {
+        let name = theme::next_preset(&self.theme_name);
+        if let Some(t) = Theme::preset(name) {
+            self.theme = t;
+            self.theme_name = name.to_owned();
+            self.status = format!("Theme: {name}");
         }
     }
 
@@ -518,6 +559,9 @@ impl App {
     /// Track the favorite/playlist keys act on: the selected one, else the
     /// one that is playing.
     fn target_track_id(&self) -> Option<i64> {
+        if self.fullscreen {
+            return self.player.now_id; // the list is not on screen
+        }
         self.selected_track().map(|t| t.id).or(self.player.now_id)
     }
 

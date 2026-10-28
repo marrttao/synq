@@ -37,7 +37,9 @@ pub struct UiConfig {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ThemeConfig {
-    /// Colors are "#rrggbb" hex strings.
+    /// Built-in color set: default / nord / gruvbox / light / mono.
+    pub preset: String,
+    /// Optional overrides of the preset, "#rrggbb"; empty = from the preset.
     pub background: String,
     pub foreground: String,
     pub dim: String,
@@ -90,11 +92,12 @@ impl Default for UiConfig {
 impl Default for ThemeConfig {
     fn default() -> Self {
         Self {
-            background: "#14141c".into(),
-            foreground: "#e6e6ef".into(),
-            dim: "#6c6c80".into(),
-            accent: "#ff79c6".into(),
-            border: "#44475a".into(),
+            preset: "default".into(),
+            background: String::new(),
+            foreground: String::new(),
+            dim: String::new(),
+            accent: String::new(),
+            border: String::new(),
         }
     }
 }
@@ -141,12 +144,14 @@ pub const DEFAULT_TOML: &str = r##"# synq settings. Delete a line to get its def
 animations = true
 
 [theme]
-# Colors are "#rrggbb".
-background = "#14141c"
-foreground = "#e6e6ef"
-dim = "#6c6c80"
-accent = "#ff79c6"
-border = "#44475a"
+# Built-in colors: default / nord / gruvbox / light / mono (press T to try them).
+preset = "default"
+# Any color can be overridden with "#rrggbb":
+# background = "#14141c"
+# foreground = "#e6e6ef"
+# dim = "#6c6c80"
+# accent = "#ff79c6"
+# border = "#44475a"
 
 [audio]
 # Start-up volume, 0.0 - 1.0.

@@ -26,6 +26,12 @@ impl App {
             ),
             area,
         );
+        if self.fullscreen {
+            self.draw_fullscreen(f, area);
+            self.fx.process(f.buffer_mut(), area);
+            self.draw_popup(f, area);
+            return;
+        }
         let [main, bottom] =
             Layout::vertical([Constraint::Min(3), Constraint::Length(5)]).areas(area);
 
@@ -52,7 +58,54 @@ impl App {
         }
 
         self.draw_player_bar(f, bottom);
+        self.fx.process(f.buffer_mut(), area);
         self.draw_popup(f, area);
+    }
+
+    /// Full screen: lyrics and picture, and one line with the track.
+    fn draw_fullscreen(&mut self, f: &mut Frame, area: Rect) {
+        let [body, footer] =
+            Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(area);
+        let (lyrics, picture) = if area.width >= 90 {
+            let [l, p] =
+                Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)])
+                    .areas(body);
+            (l, p)
+        } else {
+            let [p, l] = Layout::vertical([Constraint::Percentage(40), Constraint::Percentage(60)])
+                .areas(body);
+            (l, p)
+        };
+        self.draw_lyrics(f, lyrics);
+        self.draw_visual(f, picture);
+
+        let text = match self.now_playing() {
+            Some(t) => {
+                let total = t.duration_ms;
+                let pos = self
+                    .player
+                    .current_position(Duration::from_millis(total))
+                    .as_millis() as u64;
+                format!(
+                    "{} {} - {}  {} / {}",
+                    if self.player.paused {
+                        "\u{23F8}"
+                    } else {
+                        "\u{25B6}"
+                    },
+                    t.artist,
+                    t.title,
+                    fmt_duration(pos),
+                    fmt_duration(total)
+                )
+            }
+            None => "Nothing playing".to_owned(),
+        };
+        f.render_widget(
+            Paragraph::new(format!("{text}   (F/Esc: back, ?: keys)"))
+                .style(Style::new().fg(self.theme.dim)),
+            footer,
+        );
     }
 
     /// Left panel: tabs, an info line and the list.
@@ -275,6 +328,7 @@ impl App {
     fn draw_popup(&mut self, f: &mut Frame, screen: Rect) {
         match &mut self.mode {
             Mode::Normal | Mode::Search => {}
+            Mode::Help => self.draw_help(f, screen),
             Mode::Prompt { rename, text } => {
                 let title = if rename.is_some() {
                     "Rename playlist"
@@ -371,7 +425,7 @@ impl App {
     }
 }
 
-fn popup_block<'a>(theme: &super::Theme, title: &'a str) -> Block<'a> {
+pub(super) fn popup_block<'a>(theme: &super::Theme, title: &'a str) -> Block<'a> {
     Block::new()
         .borders(Borders::ALL)
         .title(title)

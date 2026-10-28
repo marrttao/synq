@@ -8,7 +8,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
-use crate::lyrics::lrc::current_line;
+use crate::lyrics::lrc::{self, current_line};
 use crate::lyrics::{self, Lyrics, Source};
 
 use super::App;
@@ -159,6 +159,26 @@ impl App {
         }
     }
 
+    /// Index of the line being sung now (synchronized lyrics only).
+    pub(super) fn current_line_index(&self) -> Option<usize> {
+        let LyricsState::Ready {
+            lyrics: Lyrics::Synced(lines),
+            offset_ms,
+            ..
+        } = &self.lyrics_state
+        else {
+            return None;
+        };
+        current_line(lines, self.position_ms(), *offset_ms)
+    }
+
+    fn position_ms(&self) -> u64 {
+        let total = self
+            .now_playing()
+            .map_or(Duration::ZERO, |t| Duration::from_millis(t.duration_ms));
+        self.player.current_position(total).as_millis() as u64
+    }
+
     pub(super) fn draw_lyrics(&self, f: &mut Frame, area: Rect) {
         let title = match (&self.lyrics_state, self.show_lyrics) {
             (
@@ -187,6 +207,7 @@ impl App {
         let block = self.block(&title);
         let inner = block.inner(area);
         f.render_widget(block, area);
+        self.fx.lyrics_inner.set(inner);
         if inner.width == 0 || inner.height == 0 {
             return;
         }
@@ -263,16 +284,21 @@ impl App {
                 offset_ms,
                 ..
             } => {
-                let total = self
-                    .now_playing()
-                    .map_or(Duration::ZERO, |t| Duration::from_millis(t.duration_ms));
-                let pos_ms = self.player.current_position(total).as_millis() as u64;
+                let pos_ms = self.position_ms();
                 let current = current_line(lines, pos_ms, *offset_ms);
                 let width = inner.width as usize;
                 let rows: Vec<Line> = window(current, lines.len(), inner.height as usize)
                     .into_iter()
                     .map(|slot| match slot {
                         None => Line::raw(""),
+                        Some((i, true)) if !lines[i].words.is_empty() => {
+                            let pos = pos_ms as i64 - *offset_ms;
+                            let sung = Style::new()
+                                .fg(self.theme.accent)
+                                .add_modifier(Modifier::BOLD);
+                            let waiting = Style::new().fg(self.theme.foreground);
+                            Line::from(karaoke(&lines[i].words, pos, width, sung, waiting))
+                        }
                         Some((i, is_current)) => {
                             let text = if lines[i].text.is_empty() {
                                 if is_current {
@@ -298,6 +324,54 @@ impl App {
             }
         }
     }
+}
+
+/// The current line split by words: words already reached are `sung`, the
+/// rest `waiting`. Cut with an ellipsis if wider than `width` columns.
+fn karaoke(
+    words: &[lrc::Word],
+    pos_ms: i64,
+    width: usize,
+    sung: Style,
+    waiting: Style,
+) -> Vec<Span<'static>> {
+    let columns = |s: &str| Span::raw(s.to_owned()).width();
+    let total: usize = words.iter().map(|w| columns(&w.text)).sum();
+    // Leave room for the ellipsis when the line has to be shortened.
+    let limit = if total > width {
+        width.saturating_sub(1)
+    } else {
+        width
+    };
+    let mut spans = Vec::new();
+    let mut used = 0;
+    for w in words {
+        let style = if w.time_ms as i64 <= pos_ms {
+            sung
+        } else {
+            waiting
+        };
+        let mut text = String::new();
+        for c in w.text.chars() {
+            let cw = columns(c.encode_utf8(&mut [0; 4]));
+            if used + cw > limit {
+                break;
+            }
+            used += cw;
+            text.push(c);
+        }
+        let cut = text.chars().count() < w.text.chars().count();
+        if !text.is_empty() {
+            spans.push(Span::styled(text, style));
+        }
+        if cut {
+            break;
+        }
+    }
+    if total > width {
+        spans.push(Span::styled("\u{2026}", waiting));
+    }
+    spans
 }
 
 /// Which line goes on which row, with the current line in the middle row.
@@ -397,5 +471,54 @@ mod tests {
         assert_eq!(format_offset(300), "+0.3 s");
         assert_eq!(format_offset(-1200), "-1.2 s");
         assert_eq!(format_offset(0), "0.0 s");
+    }
+
+    #[test]
+    fn karaoke_colors_words_as_they_are_reached() {
+        let w = |t: u64, s: &str| lrc::Word {
+            time_ms: t,
+            text: s.into(),
+        };
+        let words = [w(1000, "one "), w(2000, "two "), w(3000, "three")];
+        let sung = Style::new().fg(ratatui::style::Color::Red);
+        let waiting = Style::new().fg(ratatui::style::Color::Blue);
+        let spans = karaoke(&words, 2500, 80, sung, waiting);
+        let styles: Vec<_> = spans.iter().map(|s| s.style).collect();
+        assert_eq!(styles, [sung, sung, waiting]);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "one two three");
+        assert!(
+            karaoke(&words, 0, 80, sung, waiting)
+                .iter()
+                .all(|s| s.style == waiting)
+        );
+        assert!(
+            karaoke(&words, 9999, 80, sung, waiting)
+                .iter()
+                .all(|s| s.style == sung)
+        );
+    }
+
+    #[test]
+    fn karaoke_line_is_shortened_to_the_width() {
+        let w = |t: u64, s: &str| lrc::Word {
+            time_ms: t,
+            text: s.into(),
+        };
+        let words = [w(0, "hello "), w(10, "wonderful "), w(20, "world")];
+        let st = Style::new();
+        for width in [1, 5, 8, 12, 25, 80] {
+            let spans = karaoke(&words, 15, width, st, st);
+            let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+            assert!(
+                Span::raw(text.clone()).width() <= width,
+                "{width}: {text:?}"
+            );
+        }
+        let text: String = karaoke(&words, 15, 12, st, st)
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(text, "hello wonde\u{2026}");
     }
 }
