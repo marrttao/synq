@@ -48,7 +48,7 @@ impl App {
             self.draw_lyrics(f, r);
         }
         if show_right && let Some(r) = cols.next() {
-            f.render_widget(self.block("Visual"), r);
+            self.draw_visual(f, r);
         }
 
         self.draw_player_bar(f, bottom);
@@ -318,6 +318,27 @@ impl App {
                 ];
                 let block = popup_block(&self.theme, "Whisper model");
                 f.render_widget(Paragraph::new(text).block(block), area);
+            }
+            Mode::GifPick {
+                names,
+                state,
+                playlist,
+                to_playlist,
+            } => {
+                let (title, rows) =
+                    Self::gif_pick_rows(&self.visual, names, playlist.as_ref(), *to_playlist);
+                let height = (rows.len() as u16 + 2).clamp(3, 16);
+                let area = centered(screen, 56, height);
+                f.render_widget(Clear, area);
+                let list = List::new(rows.into_iter().map(ListItem::new).collect::<Vec<_>>())
+                    .block(popup_block(&self.theme, &title))
+                    .highlight_style(
+                        Style::new()
+                            .bg(self.theme.accent)
+                            .fg(self.theme.background)
+                            .add_modifier(Modifier::BOLD),
+                    );
+                f.render_stateful_widget(list, area, state);
             }
             Mode::Pick { state, .. } => {
                 let height = (self.playlist_data.len() as u16 + 2).clamp(3, 14);

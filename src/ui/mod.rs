@@ -6,6 +6,7 @@ mod lyrics_view;
 mod player;
 mod theme;
 mod tracklist;
+mod visual_view;
 mod whisper_view;
 
 use std::collections::{HashMap, HashSet};
@@ -24,9 +25,11 @@ use crate::library::LibraryEvent;
 use crate::lyrics;
 use crate::playlists::{self, PlaylistInfo, Target};
 use crate::transcribe;
+use crate::visuals;
 use lyrics_view::LyricsState;
 use player::Player;
 use theme::Theme;
+use visual_view::VisualState;
 use whisper_view::WhisperStatus;
 
 /// ~30 frames per second.
@@ -76,11 +79,27 @@ enum Mode {
         model: String,
         size_mb: u64,
     },
+    /// Choosing the picture for the Visual panel (`names` excludes the
+    /// leading "none" row). `playlist` is the playlist in context, if any.
+    GifPick {
+        names: Vec<String>,
+        state: ListState,
+        playlist: Option<(i64, String)>,
+        to_playlist: bool,
+    },
     /// Choosing the playlist for a track.
     Pick {
         track_id: i64,
         state: ListState,
     },
+}
+
+/// Background color as bytes, for drawing transparent pictures over it.
+pub fn background_rgb(cfg: &crate::config::ThemeConfig) -> [u8; 3] {
+    match Theme::from_config(cfg).background {
+        ratatui::style::Color::Rgb(r, g, b) => [r, g, b],
+        _ => [0, 0, 0],
+    }
 }
 
 pub struct App {
@@ -117,9 +136,11 @@ pub struct App {
     /// Track the current lyrics (or lookup) belong to.
     lyrics_for: Option<i64>,
     show_lyrics: bool,
+    visual: VisualState,
 }
 
 impl App {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: &Config,
         status: Option<String>,
@@ -127,6 +148,7 @@ impl App {
         playlists: playlists::Handle,
         lyrics: lyrics::Handle,
         transcribe: transcribe::Handle,
+        visuals: visuals::Handle,
         music_dir: PathBuf,
     ) -> Self {
         Self {
@@ -158,6 +180,7 @@ impl App {
             lyrics_state: LyricsState::Idle,
             lyrics_for: None,
             show_lyrics: true,
+            visual: VisualState::new(visuals),
         }
     }
 
@@ -168,11 +191,13 @@ impl App {
             self.drain_playlist_events();
             self.drain_lyrics_events();
             self.drain_transcribe_events();
+            self.drain_visual_events();
             if let Some(err) = self.player.poll() {
                 self.status = err;
             }
             self.sync_lyrics_request();
             self.tick_whisper();
+            self.tick_visuals();
             terminal.draw(|f| self.draw(f))?;
             next_frame += FRAME;
             // Wait for input until the next frame is due; keeps ~30 fps
@@ -225,6 +250,7 @@ impl App {
                     app.playlist_data = s.playlists;
                     app.favorite_set = s.favorites.iter().copied().collect();
                     app.favorites = s.favorites;
+                    app.playlists_changed();
                     // An opened playlist may have been deleted.
                     if let Some(id) = app.open_playlist
                         && !app.playlist_data.iter().any(|p| p.id == id)
@@ -377,6 +403,7 @@ impl App {
             Mode::Prompt { .. } => self.key_prompt(key),
             Mode::Confirm { .. } => self.key_confirm(key),
             Mode::Pick { .. } => self.key_pick(key),
+            Mode::GifPick { .. } => self.key_gif_pick(key),
             Mode::ConfirmModel { .. } => self.key_confirm_model(key),
         }
     }
@@ -421,6 +448,7 @@ impl App {
             KeyCode::Char('[') => self.shift_lyrics(false),
             KeyCode::Char(']') => self.shift_lyrics(true),
             KeyCode::Char('a') => self.start_pick(),
+            KeyCode::Char('g') => self.start_gif_pick(),
             KeyCode::Char('c') => self.start_create(),
             KeyCode::Char('e') => self.start_rename(),
             KeyCode::Char('d') | KeyCode::Delete => self.delete_selected(),
@@ -465,6 +493,10 @@ impl App {
     fn play_selected(&mut self) {
         let Some(selected) = self.lists[self.view().slot()].selected() else {
             return;
+        };
+        self.visual.play_context = match self.view() {
+            View::PlaylistTracks(id) => Some(id),
+            _ => None,
         };
         let result = {
             let tracks = self.view_tracks();
@@ -725,6 +757,7 @@ mod tests {
             playlists::spawn(&paths),
             lyrics::spawn(paths.db.clone(), paths.lyrics.clone(), false),
             transcribe::spawn(&test_config().whisper, &paths),
+            test_visuals(&paths),
             paths.music.clone(),
         );
         lib_tx
@@ -864,6 +897,7 @@ mod lyrics_tests {
             playlists::spawn(&paths),
             lyrics::spawn(paths.db.clone(), paths.lyrics.clone(), false),
             transcribe::spawn(&test_config().whisper, &paths),
+            test_visuals(&paths),
             paths.music.clone(),
         );
         lib_tx
@@ -932,6 +966,12 @@ mod lyrics_tests {
         app.sync_lyrics_request();
         assert!(matches!(app.lyrics_state, LyricsState::Idle));
     }
+}
+
+/// Picture worker for tests: half blocks, no terminal queries.
+#[cfg(test)]
+fn test_visuals(paths: &crate::paths::Paths) -> visuals::Handle {
+    visuals::spawn(paths, ratatui_image::picker::Picker::halfblocks(), true)
 }
 
 /// Config for tests: no automatic speech recognition in the background.
@@ -1008,6 +1048,7 @@ mod whisper_tests {
             playlists::spawn(&paths),
             lyrics::spawn(paths.db.clone(), paths.lyrics.clone(), false),
             transcribe::spawn(&config.whisper, &paths),
+            test_visuals(&paths),
             paths.music.clone(),
         );
         lib_tx
@@ -1072,6 +1113,7 @@ mod whisper_tests {
             playlists::spawn(&paths),
             lyrics::spawn(paths.db.clone(), paths.lyrics.clone(), false),
             transcribe::spawn(&config.whisper, &paths),
+            test_visuals(&paths),
             paths.music.clone(),
         );
         key(&mut app, KeyCode::Char('t'));

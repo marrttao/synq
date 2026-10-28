@@ -258,6 +258,16 @@ impl Db {
         Ok(())
     }
 
+    /// All settings whose key starts with `prefix` (plain text, no wildcards).
+    pub fn settings_with_prefix(&self, prefix: &str) -> DbResult<Vec<(String, String)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT key, value FROM settings WHERE substr(key, 1, ?2) = ?1")?;
+        let len = prefix.chars().count() as i64;
+        let rows = stmt.query_map(params![prefix, len], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
     // ---- playlists ------------------------------------------------------
 
     pub fn create_playlist(&self, name: &str) -> DbResult<i64> {

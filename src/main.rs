@@ -9,6 +9,7 @@ mod playlists;
 mod testutil;
 mod transcribe;
 mod ui;
+mod visuals;
 
 use anyhow::{Context, Result};
 use tracing_appender::non_blocking::WorkerGuard;
@@ -45,6 +46,9 @@ fn main() -> Result<()> {
     let playlists = playlists::spawn(&paths);
     let lyrics = lyrics::spawn(paths.db.clone(), paths.lyrics.clone(), config.lyrics.online);
     let transcribe = transcribe::spawn(&config.whisper, &paths);
+    let picker =
+        visuals::detect_picker(&config.visuals.protocol, ui::background_rgb(&config.theme));
+    let visuals = visuals::spawn(&paths, picker, config.visuals.pause_with_music);
     let result = ui::App::new(
         &config,
         status,
@@ -52,6 +56,7 @@ fn main() -> Result<()> {
         playlists,
         lyrics,
         transcribe,
+        visuals,
         paths.music.clone(),
     )
     .run(&mut terminal);
