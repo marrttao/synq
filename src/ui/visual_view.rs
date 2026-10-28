@@ -43,7 +43,8 @@ pub(super) enum VisualMode {
 pub(super) enum VisualFit {
     /// Covers the whole panel; what does not fit its proportions is cut off.
     Fill,
-    /// The whole picture, with its proportions; empty bands where it is short.
+    /// The whole picture with its proportions; the free space is filled with
+    /// a blurred copy of it. Nothing is cut off.
     Fit,
     /// The whole picture stretched over the whole panel.
     Stretch,
@@ -52,9 +53,9 @@ pub(super) enum VisualFit {
 impl VisualFit {
     pub(super) fn from_config(name: &str) -> Self {
         match name.trim().to_lowercase().as_str() {
-            "fit" => Self::Fit,
+            "fill" => Self::Fill,
             "stretch" => Self::Stretch,
-            _ => Self::Fill,
+            _ => Self::Fit,
         }
     }
 
@@ -168,8 +169,17 @@ fn scaled(image: &DynamicImage, w: u32, h: u32, fit: VisualFit) -> DynamicImage 
         VisualFit::Stretch => image.resize_exact(w, h, filter),
         VisualFit::Fit => {
             let small = image.resize(w, h, filter).to_rgba8();
-            // Transparent bands: the terminal background shows through.
-            let mut canvas = image::RgbaImage::new(w, h);
+            if small.width() == w && small.height() == h {
+                return DynamicImage::ImageRgba8(small);
+            }
+            // The whole picture in the middle; the free space is filled with
+            // a blurred, darker copy of the same picture, as video players do,
+            // so the panel is used completely and nothing is cut off.
+            let backdrop = image
+                .resize_to_fill((w / 16).max(1), (h / 16).max(1), FilterType::Triangle)
+                .resize_exact(w, h, FilterType::Triangle)
+                .brighten(-45);
+            let mut canvas = backdrop.to_rgba8();
             let x = i64::from((w - small.width().min(w)) / 2);
             let y = i64::from((h - small.height().min(h)) / 2);
             image::imageops::overlay(&mut canvas, &small, x, y);
@@ -769,7 +779,9 @@ mod tests {
         pump(&mut app, "gif loaded", |a| a.visual.active.is_some());
         let buf = render(&mut app, 120, 30);
         assert!(text(&buf).contains("Visual: a.gif"));
-        // The picture covers the whole panel, not a part of it.
+        // With "fill" the picture covers the whole panel, not a part of it.
+        app.visual.fit = VisualFit::Fill;
+        let buf = render(&mut app, 120, 30);
         let red = ratatui::style::Color::Rgb(255, 0, 0);
         let painted = buf
             .content()
@@ -917,22 +929,30 @@ mod fit_tests {
     }
 
     #[test]
-    fn fill_and_stretch_cover_everything_and_fit_leaves_bands() {
+    fn every_fit_covers_the_whole_panel_and_fit_keeps_the_whole_picture() {
         let opaque = |img: &DynamicImage| img.to_rgba8().pixels().all(|p| p[3] == 255);
         assert!(opaque(&scaled(&wide(), 60, 60, VisualFit::Fill)));
         assert!(opaque(&scaled(&wide(), 60, 60, VisualFit::Stretch)));
+        assert!(opaque(&scaled(&wide(), 60, 60, VisualFit::Fit)));
         let fit = scaled(&wide(), 60, 60, VisualFit::Fit).to_rgba8();
-        assert_eq!(fit.get_pixel(30, 0)[3], 0, "empty band on top");
-        assert_eq!(fit.get_pixel(30, 59)[3], 0, "and at the bottom");
-        assert_eq!(fit.get_pixel(30, 30)[3], 255, "the picture in the middle");
-        assert_eq!(fit.get_pixel(0, 30)[3], 255, "as wide as the panel");
+        // The picture is as wide as the panel, all of it, in the middle...
+        assert_eq!(fit.get_pixel(30, 30).0, [200, 10, 10, 255]);
+        assert_eq!(fit.get_pixel(0, 30).0, [200, 10, 10, 255]);
+        // ...and the free space above and below is a darker blurred copy.
+        let band = fit.get_pixel(30, 2);
+        assert_eq!(band[3], 255);
+        assert!(band[0] < 200 && band[0] > 100, "{band:?}");
+        // A picture of the panel's own proportions has no bands at all.
+        let exact = scaled(&wide(), 80, 40, VisualFit::Fit).to_rgba8();
+        assert_eq!(exact.get_pixel(0, 0).0, [200, 10, 10, 255]);
     }
 
     #[test]
     fn the_fit_names_come_from_config_and_cycle() {
         assert_eq!(VisualFit::from_config("fit"), VisualFit::Fit);
         assert_eq!(VisualFit::from_config("Stretch"), VisualFit::Stretch);
-        assert_eq!(VisualFit::from_config("???"), VisualFit::Fill);
+        assert_eq!(VisualFit::from_config("???"), VisualFit::Fit);
+        assert_eq!(VisualFit::from_config("fill"), VisualFit::Fill);
         assert_eq!(VisualFit::Fill.cycle().cycle().cycle(), VisualFit::Fill);
     }
 }

@@ -141,7 +141,7 @@ impl Default for VisualsConfig {
         Self {
             protocol: "auto".into(),
             mode: "picture".into(),
-            fit: "fill".into(),
+            fit: "fit".into(),
             pause_with_music: true,
         }
     }
@@ -189,8 +189,9 @@ language = "auto"
 protocol = "auto"
 # How the picture is drawn: "picture" (pixels), "blocks" (smooth) or "ascii" (key v switches).
 mode = "picture"
-# How the picture fits its panel: "fill" (crops), "fit" (whole) or "stretch" (key V).
-fit = "fill"
+# How the picture fits its panel: "fit" (whole picture, blurred copy fills the rest),
+# "fill" (crops the edges) or "stretch" (key V).
+fit = "fit"
 # Pause GIF animation together with the music.
 pause_with_music = true
 "##;
