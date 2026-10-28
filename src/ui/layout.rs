@@ -224,7 +224,7 @@ impl Layout {
     }
 }
 
-fn presets() -> Vec<Layout> {
+pub(super) fn presets() -> Vec<Layout> {
     vec![
         // What the player always looked like.
         Layout::preset(
@@ -321,9 +321,10 @@ impl LayoutSet {
         self.layouts.iter().any(|l| l.custom && l.name == name)
     }
 
-    /// Switch to the next layout; returns its name.
-    pub fn next(&mut self) -> Result<String, String> {
-        self.current = (self.current + 1) % self.layouts.len();
+    /// Switch to the next or previous layout; returns its name.
+    pub fn step(&mut self, forward: bool) -> Result<String, String> {
+        let n = self.layouts.len();
+        self.current = (self.current + if forward { 1 } else { n - 1 }) % n;
         let name = self.current().name.clone();
         self.remember_current().map(|()| name)
     }
@@ -492,7 +493,7 @@ mod tests {
         let mut fake = mine.clone();
         fake.name = "Classic".into();
         assert!(set.save(fake).is_err());
-        let seen: Vec<String> = (0..5).map(|_| set.next().unwrap()).collect();
+        let seen: Vec<String> = (0..5).map(|_| set.step(true).unwrap()).collect();
         assert_eq!(seen, ["Classic", "Lyrics", "Cinema", "Custom 1", "Classic"]);
         assert!(set.delete("Classic").is_err());
         set.delete("Custom 1").unwrap();

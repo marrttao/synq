@@ -12,10 +12,31 @@ use super::palette::{MAX_COLORS, MIN_COLORS, Palette, hex, role};
 use super::theme::parse_hex;
 use super::{App, Mode};
 
+/// How much Left/Right change every channel.
+const SHADE: i16 = 16;
+
+fn shade(c: [u8; 3], by: i16) -> [u8; 3] {
+    c.map(|v| (i16::from(v) + by).clamp(0, 255) as u8)
+}
+
+/// "ff79c6", "#ff79c6" or the short "f7c".
+fn parse_typed(text: &str) -> Option<[u8; 3]> {
+    let digits = text.trim_start_matches('#');
+    let full = match digits.len() {
+        6 => digits.to_owned(),
+        3 => digits.chars().flat_map(|c| [c, c]).collect(),
+        _ => return None,
+    };
+    match parse_hex(&full)? {
+        Color::Rgb(r, g, b) => Some([r, g, b]),
+        _ => None,
+    }
+}
+
 impl App {
-    /// `T`: the next palette (built-in ones, then yours).
-    pub(super) fn next_theme(&mut self) {
-        match self.palettes.next() {
+    /// The next or previous palette (built-in ones, then yours).
+    pub(super) fn step_theme(&mut self, forward: bool) {
+        match self.palettes.step(forward) {
             Ok(p) => {
                 self.theme = p.theme();
                 self.status = format!("Colors: {} ({} colors)", p.name, p.colors.len());
@@ -58,16 +79,14 @@ impl App {
                 KeyCode::Backspace => {
                     text.pop();
                 }
-                KeyCode::Char(c) if (c.is_ascii_hexdigit() || c == '#') && text.len() < 7 => {
-                    text.push(c);
-                }
-                KeyCode::Enter => match parse_hex(text) {
-                    Some(Color::Rgb(r, g, b)) => {
-                        draft.colors[*selected] = [r, g, b];
+                KeyCode::Char(c) if c.is_ascii_hexdigit() && text.len() < 6 => text.push(c),
+                KeyCode::Enter => match parse_typed(text) {
+                    Some(rgb) => {
+                        draft.colors[*selected] = rgb;
                         *typing = None;
                         self.theme = draft.theme();
                     }
-                    _ => self.status = "Type a color as 6 hex digits, e.g. ff79c6".into(),
+                    None => self.status = "Type 3 or 6 hex digits, e.g. ff79c6".into(),
                 },
                 _ => {}
             }
@@ -87,13 +106,13 @@ impl App {
             KeyCode::Up | KeyCode::BackTab => {
                 *selected = selected.saturating_sub(1);
             }
-            KeyCode::Enter => {
-                *typing = Some(
-                    hex(draft.colors[*selected])
-                        .trim_start_matches('#')
-                        .to_owned(),
-                );
-            }
+            // Enter, or simply starting to type a value: the field is empty
+            // and what is typed replaces the color.
+            KeyCode::Enter | KeyCode::Char('#') => *typing = Some(String::new()),
+            KeyCode::Char(c) if c.is_ascii_hexdigit() => *typing = Some(c.to_string()),
+            // Lighter and darker without typing anything.
+            KeyCode::Left => draft.colors[*selected] = shade(draft.colors[*selected], -SHADE),
+            KeyCode::Right => draft.colors[*selected] = shade(draft.colors[*selected], SHADE),
             KeyCode::Char('+' | '=') => {
                 if draft.colors.len() < MAX_COLORS {
                     let from = draft.colors[last];
@@ -192,9 +211,9 @@ impl App {
             .collect();
         lines.push(Line::default());
         let hint = if typing.is_some() {
-            "Type 6 hex digits, Enter: set, Esc: back"
+            "Type 6 hex digits (0-9, a-f), Enter: set, Esc: back"
         } else {
-            "Enter: type a color  +: add  -: remove  F2: save  F3: save as new  F4: delete  Esc: cancel"
+            "Type a hex value, or Left/Right: darker/lighter | +: add | -: remove | F2: save | F3: save as new | F4: delete | Esc: cancel"
         };
         lines.push(Line::styled(hint, Style::new().fg(self.theme.dim)));
         f.render_widget(
@@ -206,5 +225,21 @@ impl App {
                 )),
             area,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn typed_colors_accept_short_and_long_forms() {
+        assert_eq!(parse_typed("ff79c6"), Some([0xff, 0x79, 0xc6]));
+        assert_eq!(parse_typed("#102030"), Some([0x10, 0x20, 0x30]));
+        assert_eq!(parse_typed("f0a"), Some([0xff, 0x00, 0xaa]));
+        assert_eq!(parse_typed("f0"), None);
+        assert_eq!(parse_typed(""), None);
+        assert_eq!(shade([250, 5, 100], 16), [255, 21, 116]);
+        assert_eq!(shade([250, 5, 100], -16), [234, 0, 84]);
     }
 }

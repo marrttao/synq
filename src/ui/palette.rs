@@ -146,9 +146,10 @@ impl PaletteSet {
         self.items.iter().any(|p| p.custom && p.name == name)
     }
 
-    /// Switch to the next palette; returns it.
-    pub fn next(&mut self) -> Result<Palette, String> {
-        self.current = (self.current + 1) % self.items.len();
+    /// Switch to the next or previous palette; returns it.
+    pub fn step(&mut self, forward: bool) -> Result<Palette, String> {
+        let n = self.items.len();
+        self.current = (self.current + if forward { 1 } else { n - 1 }) % n;
         let now = self.current().clone();
         self.remember().map(|()| now)
     }
@@ -251,7 +252,7 @@ mod tests {
         assert!(set.delete("nord").is_err());
         set.delete("Mine 1").unwrap();
         assert_eq!(set.current().name, "default");
-        let first = set.next().unwrap();
+        let first = set.step(true).unwrap();
         assert_eq!(first.name, "nord");
         let (after, _) = PaletteSet::load(db, "default");
         assert!(!after.exists_custom("Mine 1"));

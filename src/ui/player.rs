@@ -126,14 +126,19 @@ impl Player {
         self.audio.send(Command::Prev);
     }
 
-    /// Seek relative to the current position; `forward` picks the direction.
-    pub fn seek(&mut self, forward: bool, duration: Duration) {
+    /// Seek relative to the current position; `forward` picks the direction
+    /// and `big` takes six steps at once.
+    pub fn seek(&mut self, forward: bool, big: bool, duration: Duration) {
         if self.now_id.is_none() {
             return;
         }
         let target = seek_target(
             self.current_position(duration),
-            self.seek_step,
+            if big {
+                self.seek_step * 6
+            } else {
+                self.seek_step
+            },
             forward,
             duration,
         );

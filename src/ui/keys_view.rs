@@ -26,8 +26,10 @@ impl App {
             }
             Action::Next => self.player.next(),
             Action::Prev => self.player.prev(),
-            Action::SeekBack => self.seek(false),
-            Action::SeekForward => self.seek(true),
+            Action::SeekBack => self.seek(false, false),
+            Action::SeekForward => self.seek(true, false),
+            Action::SeekBackBig => self.seek(false, true),
+            Action::SeekForwardBig => self.seek(true, true),
             Action::VolumeUp => self.player.change_volume(true),
             Action::VolumeDown => self.player.change_volume(false),
             Action::Shuffle => self.player.toggle_shuffle(),
@@ -39,7 +41,10 @@ impl App {
             Action::Fullscreen => self.toggle_fullscreen(),
             Action::PictureMode => self.toggle_picture_mode(),
             Action::Refresh => self.refresh(),
-            Action::NextLayout => self.next_layout(),
+            Action::NextLayout => self.step_layout(true),
+            Action::PrevLayout => self.step_layout(false),
+            Action::NextPalette => self.step_theme(true),
+            Action::PrevPalette => self.step_theme(false),
         }
     }
 

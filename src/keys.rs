@@ -15,6 +15,8 @@ pub enum Action {
     Prev,
     SeekBack,
     SeekForward,
+    SeekBackBig,
+    SeekForwardBig,
     VolumeUp,
     VolumeDown,
     Shuffle,
@@ -27,15 +29,20 @@ pub enum Action {
     PictureMode,
     Refresh,
     NextLayout,
+    PrevLayout,
+    NextPalette,
+    PrevPalette,
 }
 
 impl Action {
-    pub const ALL: [Action; 17] = [
+    pub const ALL: [Action; 22] = [
         Action::PlayPause,
         Action::Next,
         Action::Prev,
         Action::SeekBack,
         Action::SeekForward,
+        Action::SeekBackBig,
+        Action::SeekForwardBig,
         Action::VolumeUp,
         Action::VolumeDown,
         Action::Shuffle,
@@ -46,8 +53,11 @@ impl Action {
         Action::LyricsLater,
         Action::Fullscreen,
         Action::PictureMode,
-        Action::Refresh,
         Action::NextLayout,
+        Action::PrevLayout,
+        Action::NextPalette,
+        Action::PrevPalette,
+        Action::Refresh,
     ];
 
     /// Stable name used in the database.
@@ -58,6 +68,8 @@ impl Action {
             Action::Prev => "prev",
             Action::SeekBack => "seek_back",
             Action::SeekForward => "seek_forward",
+            Action::SeekBackBig => "seek_back_big",
+            Action::SeekForwardBig => "seek_forward_big",
             Action::VolumeUp => "volume_up",
             Action::VolumeDown => "volume_down",
             Action::Shuffle => "shuffle",
@@ -70,6 +82,9 @@ impl Action {
             Action::PictureMode => "picture_mode",
             Action::Refresh => "refresh",
             Action::NextLayout => "next_layout",
+            Action::PrevLayout => "prev_layout",
+            Action::NextPalette => "next_palette",
+            Action::PrevPalette => "prev_palette",
         }
     }
 
@@ -80,6 +95,8 @@ impl Action {
             Action::Prev => "Previous track",
             Action::SeekBack => "Seek back",
             Action::SeekForward => "Seek forward",
+            Action::SeekBackBig => "Seek back (big)",
+            Action::SeekForwardBig => "Seek forward (big)",
             Action::VolumeUp => "Volume up",
             Action::VolumeDown => "Volume down",
             Action::Shuffle => "Shuffle on / off",
@@ -92,6 +109,9 @@ impl Action {
             Action::PictureMode => "Picture / ASCII",
             Action::Refresh => "Refresh everything",
             Action::NextLayout => "Next layout",
+            Action::PrevLayout => "Previous layout",
+            Action::NextPalette => "Next colors",
+            Action::PrevPalette => "Previous colors",
         }
     }
 
@@ -103,18 +123,23 @@ impl Action {
             Action::Prev => plain(KeyCode::Char('p')),
             Action::SeekBack => plain(KeyCode::Left),
             Action::SeekForward => plain(KeyCode::Right),
+            Action::SeekBackBig => Chord::new(KeyCode::Left, KeyModifiers::SHIFT),
+            Action::SeekForwardBig => Chord::new(KeyCode::Right, KeyModifiers::SHIFT),
             Action::VolumeUp => plain(KeyCode::Char('+')),
             Action::VolumeDown => plain(KeyCode::Char('-')),
             Action::Shuffle => plain(KeyCode::Char('s')),
             Action::Repeat => plain(KeyCode::Char('r')),
-            Action::Favorite => plain(KeyCode::Char('f')),
+            Action::Favorite => plain(KeyCode::Char('*')),
             Action::Lyrics => plain(KeyCode::Char('l')),
             Action::LyricsEarlier => plain(KeyCode::Char('[')),
             Action::LyricsLater => plain(KeyCode::Char(']')),
-            Action::Fullscreen => plain(KeyCode::Char('F')),
+            Action::Fullscreen => plain(KeyCode::Char('f')),
             Action::PictureMode => plain(KeyCode::Char('v')),
-            Action::Refresh => plain(KeyCode::Char('R')),
-            Action::NextLayout => plain(KeyCode::Char('L')),
+            Action::Refresh => plain(KeyCode::F(5)),
+            Action::NextLayout => plain(KeyCode::Char('}')),
+            Action::PrevLayout => plain(KeyCode::Char('{')),
+            Action::NextPalette => plain(KeyCode::Char(')')),
+            Action::PrevPalette => plain(KeyCode::Char('(')),
         }
     }
 }
@@ -447,13 +472,25 @@ impl Keymap {
     }
 }
 
+/// The Latin key at the same place of the keyboard for a Cyrillic letter, so
+/// that every key works with a Russian layout too.
+pub fn latin_for(c: char) -> char {
+    RU.chars()
+        .position(|r| r == c)
+        .and_then(|i| EN.chars().nth(i))
+        .unwrap_or(c)
+}
+
+const RU: &str = "йцукенгшщзхъфывапролджэячсмитьбюЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮ";
+const EN: &str = "qwertyuiop[]asdfghjkl;'zxcvbnm,.QWERTYUIOP{}ASDFGHJKL:\"ZXCVBNM<>";
+
 /// Keys that the interface itself needs.
 fn reserved(chord: Chord) -> bool {
     let plain = chord.mods.is_empty();
     match chord.code {
         KeyCode::Esc | KeyCode::Enter | KeyCode::Tab | KeyCode::Backspace => true,
         KeyCode::Char('c') if chord.mods == KeyModifiers::CONTROL => true,
-        KeyCode::Char(c) if plain => "qjk/acedgtTSEC?".contains(c),
+        KeyCode::Char(c) if plain => "qjk/acedgtSEC?".contains(c),
         KeyCode::Up
         | KeyCode::Down
         | KeyCode::PageUp
@@ -475,6 +512,19 @@ mod tests {
 
     fn ctrl(c: char) -> Chord {
         Chord::new(KeyCode::Char(c), KeyModifiers::CONTROL)
+    }
+
+    #[test]
+    fn russian_letters_map_to_the_same_keys() {
+        assert_eq!(latin_for('ы'), 's');
+        assert_eq!(latin_for('т'), 'n');
+        assert_eq!(latin_for('з'), 'p');
+        assert_eq!(latin_for('Х'), '{');
+        assert_eq!(latin_for('Ъ'), '}');
+        assert_eq!(latin_for('а'), 'f');
+        assert_eq!(latin_for('x'), 'x');
+        assert_eq!(latin_for(' '), ' ');
+        assert_eq!(RU.chars().count(), EN.chars().count());
     }
 
     #[test]

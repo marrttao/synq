@@ -76,7 +76,7 @@ fn line(time_ms: u64, text: &str, words: Vec<Word>) -> Line {
 
 #[test]
 fn help_lists_every_key_of_the_spec_and_any_key_closes_it() {
-    for k in ["a", "/", "g", "t", "S", "q", "?"] {
+    for k in ["a", "/", "g", "t", "S", "q", "? / F1"] {
         assert!(
             help::HELP.iter().any(|(key, _)| *key == k),
             "the help misses {k}"
@@ -84,7 +84,7 @@ fn help_lists_every_key_of_the_spec_and_any_key_closes_it() {
     }
     let (_tmp, mut app) = make_app(false);
     key(&mut app, KeyCode::Char('?'));
-    assert!(matches!(app.mode, Mode::Help));
+    assert!(matches!(app.mode, Mode::Help { .. }));
     assert!(text(&render(&mut app, 120, 40)).contains("Full screen"));
     for (w, h) in [(80, 20), (30, 8), (10, 4), (1, 1)] {
         render(&mut app, w, h);
@@ -98,7 +98,7 @@ fn help_lists_every_key_of_the_spec_and_any_key_closes_it() {
 fn fullscreen_shows_only_lyrics_and_picture_and_ignores_the_list_keys() {
     let (_tmp, mut app) = make_app(false);
     assert!(text(&render(&mut app, 120, 30)).contains("Library"));
-    key(&mut app, KeyCode::Char('F'));
+    key(&mut app, KeyCode::Char('f'));
     assert!(app.fullscreen);
     for (w, h) in [(120, 30), (80, 24), (50, 12), (10, 4), (1, 1)] {
         let t = text(&render(&mut app, w, h));
@@ -114,8 +114,8 @@ fn fullscreen_shows_only_lyrics_and_picture_and_ignores_the_list_keys() {
     assert_eq!(app.tab, 0);
     key(&mut app, KeyCode::Esc);
     assert!(!app.fullscreen);
-    key(&mut app, KeyCode::Char('F'));
-    key(&mut app, KeyCode::Char('F'));
+    key(&mut app, KeyCode::Char('f'));
+    key(&mut app, KeyCode::Char('f'));
     assert!(!app.fullscreen);
 }
 
@@ -125,13 +125,13 @@ fn theme_key_cycles_through_the_presets() {
     let first = app.theme.background;
     let mut seen = vec![first];
     for _ in 0..4 {
-        key(&mut app, KeyCode::Char('T'));
+        key(&mut app, KeyCode::Char(')'));
         seen.push(app.theme.background);
     }
     seen.sort_by_key(|c| format!("{c:?}"));
     seen.dedup();
     assert_eq!(seen.len(), 5, "five different backgrounds");
-    key(&mut app, KeyCode::Char('T'));
+    key(&mut app, KeyCode::Char(')'));
     assert_eq!(app.theme.background, first, "the cycle closes");
     assert!(app.status.starts_with("Colors:"));
     render(&mut app, 120, 30);

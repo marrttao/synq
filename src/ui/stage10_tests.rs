@@ -88,7 +88,7 @@ fn refresh_asks_for_a_rescan_and_notices_new_pictures() {
     app.drain_visual_events();
     assert_eq!(app.desired_gif(), None);
     std::fs::write(paths.gifs.join("new.gif"), gif()).unwrap();
-    key(&mut app, KeyCode::Char('R'));
+    key(&mut app, KeyCode::F(5));
     assert!(
         refresh_rx.try_recv().is_ok(),
         "the library is asked to rescan"
@@ -173,12 +173,12 @@ fn a_rebound_key_does_the_action_and_the_old_one_does_not() {
             Chord::new(KeyCode::F(11), KeyModifiers::NONE),
         )
         .unwrap();
-    key(&mut app, KeyCode::Char('F'));
+    key(&mut app, KeyCode::Char('f'));
     assert!(!app.fullscreen);
     key(&mut app, KeyCode::F(11));
     assert!(app.fullscreen);
     // Actions also work while a dialog is open when they come from outside.
-    app.mode = Mode::Help;
+    app.mode = Mode::Help { scroll: 0 };
     app.run_action(Action::Fullscreen);
     assert!(!app.fullscreen);
 }
@@ -206,19 +206,19 @@ fn l_cycles_through_the_layouts_and_each_one_draws_at_every_size() {
     let t = screen_text(&mut app, 120, 30);
     assert!(t.contains("Library") && t.contains("Lyrics") && t.contains("Visual"));
 
-    key(&mut app, KeyCode::Char('L'));
+    key(&mut app, KeyCode::Char('}'));
     assert!(app.status.contains("Lyrics"), "{}", app.status);
     let t = screen_text(&mut app, 120, 30);
     assert!(!t.contains("Library"), "the Lyrics layout has no list");
     assert!(t.contains("Visual"));
 
-    key(&mut app, KeyCode::Char('L'));
+    key(&mut app, KeyCode::Char('}'));
     assert!(app.status.contains("Cinema"), "{}", app.status);
     for _ in 0..4 {
         for (w, h) in [(120, 40), (80, 24), (50, 12), (20, 6), (10, 4), (1, 1)] {
             screen_text(&mut app, w, h);
         }
-        key(&mut app, KeyCode::Char('L'));
+        key(&mut app, KeyCode::Char('}'));
     }
 }
 
@@ -238,7 +238,7 @@ fn the_editor_moves_resizes_hides_and_saves_a_new_layout() {
     let Mode::LayoutEdit { draft, .. } = &app.mode else {
         panic!("still editing")
     };
-    assert_eq!(draft.places[0].w, 30);
+    assert_eq!(draft.places[0].w, 24);
     assert!(!draft.places[2].visible && !draft.player);
     // The preview shows the draft at once, with the editor hints.
     let t = screen_text(&mut app, 120, 30);
@@ -255,7 +255,7 @@ fn the_editor_moves_resizes_hides_and_saves_a_new_layout() {
     // It survives a restart and the built-in ones are untouched.
     let (again, _) = LayoutSet::load(paths.db.clone());
     assert_eq!(again.current().name, "Custom 1");
-    assert_eq!(again.current().places[0].w, 30);
+    assert_eq!(again.current().places[0].w, 24);
 
     // Editing a saved layout and "save as new" keeps the first one.
     key(&mut app, KeyCode::Char('E'));
@@ -301,7 +301,7 @@ fn type_text(app: &mut App, text: &str) {
 fn t_cycles_the_palettes_and_remembers_the_choice() {
     let (_tmp, paths, mut app) = setup_with_palettes();
     let first = app.theme.background;
-    key(&mut app, KeyCode::Char('T'));
+    key(&mut app, KeyCode::Char(')'));
     assert!(app.status.contains("nord"), "{}", app.status);
     assert_ne!(app.theme.background, first);
     let (again, _) = PaletteSet::load(paths.db.clone(), "default");
@@ -415,13 +415,13 @@ fn player_keys_do_nothing_inside_the_editors() {
     let Mode::LayoutEdit { draft, .. } = &app.mode else {
         panic!("still editing")
     };
-    assert_eq!(draft.places[0].w, start.places[0].w - 2);
+    assert_eq!(draft.places[0].w, start.places[0].w - 5);
     key(&mut app, KeyCode::Esc);
     assert_eq!(app.layouts.current(), &before);
 
     key(&mut app, KeyCode::Char('C'));
     let colors = app.palettes.current().colors.clone();
-    for c in "jkesnD".chars() {
+    for c in "jknsxzv".chars() {
         key(&mut app, KeyCode::Char(c));
     }
     let Mode::PaletteEdit {
@@ -434,4 +434,199 @@ fn player_keys_do_nothing_inside_the_editors() {
     };
     assert_eq!(draft.colors, colors);
     assert_eq!((*selected, typing.is_none()), (0, true));
+}
+
+fn track(id: i64, title: &str) -> crate::db::Track {
+    crate::db::Track {
+        id,
+        path: format!("{title}.mp3"),
+        title: title.into(),
+        artist: "A".into(),
+        album: String::new(),
+        duration_ms: 60_000,
+        missing: false,
+    }
+}
+
+fn with_tracks(app: &mut App, n: i64) {
+    app.tracks = (1..=n).map(|i| track(i, &format!("t{i}"))).collect();
+    app.track_index = app
+        .tracks
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (t.id, i))
+        .collect();
+}
+
+#[test]
+fn the_highlight_follows_the_track_that_plays() {
+    let (_tmp, _paths, mut app, _r) = setup();
+    with_tracks(&mut app, 5);
+    app.lists[0].select(Some(0));
+    // The player moves on by itself (next track, end of a track...).
+    app.player.now_id = Some(4);
+    app.follow_playing();
+    assert_eq!(app.lists[0].selected(), Some(3));
+    // The user moves away; nothing pulls the highlight back until the track changes.
+    key(&mut app, KeyCode::Up);
+    app.follow_playing();
+    assert_eq!(app.lists[0].selected(), Some(2));
+    app.player.now_id = Some(2);
+    app.follow_playing();
+    assert_eq!(app.lists[0].selected(), Some(1));
+    // Favorite and "add to playlist" act on that same highlighted track.
+    key(&mut app, KeyCode::Char('*'));
+    assert!(app.status.contains("t2"), "{}", app.status);
+}
+
+#[test]
+fn old_messages_give_way_to_the_key_hints() {
+    let (_tmp, _paths, mut app, _r) = setup();
+    app.age_status();
+    assert_eq!(app.status, HINT);
+    app.status = "Something happened".into();
+    app.age_status();
+    assert_eq!(app.status, "Something happened");
+    app.status_since = Instant::now() - Duration::from_secs(10);
+    app.age_status();
+    assert_eq!(app.status, HINT);
+}
+
+#[test]
+fn a_russian_layout_works_for_the_letter_keys() {
+    let (_tmp, _paths, mut app, _r) = setup();
+    key(&mut app, KeyCode::Char('а')); // the key of "f": full screen
+    assert!(app.fullscreen);
+    key(&mut app, KeyCode::Char('а'));
+    assert!(!app.fullscreen);
+    key(&mut app, KeyCode::Char('Х')); // Shift+"[": previous layout
+    assert!(app.status.contains("Cinema"), "{}", app.status);
+    key(&mut app, KeyCode::Char('Ъ')); // next layout
+    assert!(app.status.contains("Classic"), "{}", app.status);
+    // Typing into the search box is not translated.
+    key(&mut app, KeyCode::Char('/'));
+    key(&mut app, KeyCode::Char('ы'));
+    assert_eq!(app.filter, "ы");
+}
+
+#[test]
+fn layouts_and_palettes_have_keys_both_ways() {
+    let (_tmp, _paths, mut app) = setup_with_palettes();
+    key(&mut app, KeyCode::Char('{'));
+    assert!(app.status.contains("Cinema"), "{}", app.status);
+    key(&mut app, KeyCode::Char('}'));
+    assert!(app.status.contains("Classic"), "{}", app.status);
+    let start = app.theme.background;
+    key(&mut app, KeyCode::Char(')'));
+    let forward = app.theme.background;
+    assert_ne!(forward, start);
+    key(&mut app, KeyCode::Char('('));
+    assert_eq!(app.theme.background, start);
+}
+
+#[test]
+fn the_menu_lists_everything_and_runs_the_chosen_row() {
+    let (_tmp, _paths, mut app, _r) = setup();
+    key(&mut app, KeyCode::F(10));
+    assert!(matches!(app.mode, Mode::Menu { .. }));
+    let t = screen_text(&mut app, 120, 40);
+    assert!(t.contains("Edit the screen layout") && t.contains("Pause / play"));
+    for (w, h) in [(60, 20), (30, 8), (1, 1)] {
+        screen_text(&mut app, w, h);
+    }
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Enter); // "Edit the screen layout"
+    assert!(matches!(app.mode, Mode::LayoutEdit { .. }));
+    key(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('p'), KeyModifiers::CONTROL);
+    assert!(matches!(app.mode, Mode::Menu { .. }));
+    key(&mut app, KeyCode::Esc);
+    assert!(matches!(app.mode, Mode::Normal));
+    // Any action can be run from the menu too.
+    key(&mut app, KeyCode::F(10));
+    for _ in 0..5 + Action::ALL
+        .iter()
+        .position(|a| *a == Action::Fullscreen)
+        .unwrap()
+    {
+        key(&mut app, KeyCode::Down);
+    }
+    key(&mut app, KeyCode::Enter);
+    assert!(app.fullscreen);
+}
+
+#[test]
+fn help_scrolls_with_arrows_and_closes_with_any_other_key() {
+    let (_tmp, _paths, mut app, _r) = setup();
+    key(&mut app, KeyCode::F(1));
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Down);
+    assert!(matches!(app.mode, Mode::Help { scroll: 2 }));
+    for (w, h) in [(120, 20), (60, 10), (1, 1)] {
+        screen_text(&mut app, w, h);
+    }
+    key(&mut app, KeyCode::End);
+    screen_text(&mut app, 120, 20);
+    key(&mut app, KeyCode::Char('x'));
+    assert!(matches!(app.mode, Mode::Normal));
+}
+
+fn mouse(app: &mut App, kind: ratatui::crossterm::event::MouseEventKind, col: u16, row: u16) {
+    app.handle_event(Event::Mouse(ratatui::crossterm::event::MouseEvent {
+        kind,
+        column: col,
+        row,
+        modifiers: KeyModifiers::NONE,
+    }));
+}
+
+#[test]
+fn panels_can_be_dragged_and_resized_with_the_mouse() {
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind::*};
+    let (_tmp, _paths, mut app) = setup_with_db();
+    screen_text(&mut app, 120, 30);
+    key(&mut app, KeyCode::Char('E'));
+    screen_text(&mut app, 120, 30);
+    let main = app.layout_main;
+    assert_eq!((main.width, main.height), (120, 25));
+    let Mode::LayoutEdit { draft, .. } = &app.mode else {
+        panic!("editing")
+    };
+    let lyrics = draft.places[1];
+    // Press on the middle of the Lyrics panel, drag 12 columns right.
+    mouse(&mut app, Down(MouseButton::Left), 60, 10);
+    mouse(&mut app, Drag(MouseButton::Left), 66, 10);
+    mouse(&mut app, Up(MouseButton::Left), 66, 10);
+    let Mode::LayoutEdit {
+        draft, selected, ..
+    } = &app.mode
+    else {
+        panic!("editing")
+    };
+    assert_eq!(*selected, 1);
+    // Lyrics sits against the right-hand panel, so it can only move a little.
+    assert_eq!(draft.places[1].w, lyrics.w);
+    assert_eq!(draft.places[1].x, lyrics.x + 5);
+
+    // Grab the bottom-right corner of the Library panel and shrink it.
+    let lib = draft.places[0];
+    let r = lib.raw_rect(main);
+    let (cx, cy) = (r.x + r.width - 1, r.y + r.height - 1);
+    mouse(&mut app, Down(MouseButton::Left), cx, cy);
+    mouse(&mut app, Drag(MouseButton::Left), cx - 12, cy - 5);
+    mouse(&mut app, Up(MouseButton::Left), cx - 12, cy - 5);
+    let Mode::LayoutEdit {
+        draft, selected, ..
+    } = &app.mode
+    else {
+        panic!("editing")
+    };
+    assert_eq!(*selected, 0);
+    assert_eq!(draft.places[0].w, lib.w - 10);
+    assert_eq!(draft.places[0].h, lib.h - 20);
+    screen_text(&mut app, 120, 30);
+    // A mouse event outside the editor does nothing.
+    key(&mut app, KeyCode::Esc);
+    mouse(&mut app, Down(MouseButton::Left), 5, 5);
+    assert!(matches!(app.mode, Mode::Normal));
 }

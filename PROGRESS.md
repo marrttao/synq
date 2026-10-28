@@ -1,6 +1,13 @@
 # PROGRESS
 
 
+## Stage 13: easier to use
+- Standard keys: `f` full screen, `*` favorite, F5 refresh, `{ }` layouts, `( )` palettes, Shift+arrows seek 30 s; every pair has a back key. Russian layout is mapped to the Latin keys (`keys::latin_for`).
+- The list highlight follows the playing track; messages name the track; old messages give way to the key hint line.
+- F10 / Ctrl+P menu with every tool and action and its key; scrolling help (`?`/F1).
+- Layout editor redone: labelled boxes, mouse drag/resize (mouse captured only while editing), preset starts with 1-3, plain-language help. Letter keys no longer used.
+- Color editor fixed: typing starts from an empty field (it used to be pre-filled and capped, so nothing could be typed); 3/6 hex digits, Left/Right shade.
+
 ## Stage 12: palettes of N colors
 - `ui/palette.rs`: built-in sets and own palettes of 2..12 colors (`palette:<name>` in settings, current choice remembered and wins over config.toml). `T` cycles, `C` edits with live preview. Colors 6+ rotate with the accent on the current lyric line and panel titles (`Theme::rotating`).
 

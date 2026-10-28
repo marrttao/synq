@@ -38,6 +38,11 @@ impl App {
         let [main, bottom] =
             Layout::vertical([Constraint::Min(0), Constraint::Length(bar)]).areas(area);
 
+        self.layout_main = main;
+        if matches!(self.mode, Mode::LayoutEdit { .. }) {
+            self.draw_layout_editor(f, area, main);
+            return;
+        }
         self.fx.lyrics_inner.set(Rect::ZERO);
         let [library, lyrics, visual] = layout.effective(area.width);
         if let Some(r) = library.rect(main) {
@@ -53,7 +58,6 @@ impl App {
             self.draw_player_bar(f, bottom);
         }
         self.fx.process(f.buffer_mut(), area);
-        self.draw_layout_editor(f, area, main);
         self.draw_popup(f, area);
     }
 
@@ -323,7 +327,17 @@ impl App {
     fn draw_popup(&mut self, f: &mut Frame, screen: Rect) {
         match &mut self.mode {
             Mode::Normal | Mode::Search => {}
-            Mode::Help => self.draw_help(f, screen),
+            Mode::Help { scroll } => {
+                let scroll = *scroll;
+                self.draw_help(f, screen, scroll);
+            }
+            Mode::Menu { state } => {
+                let mut st = std::mem::take(state);
+                self.draw_menu(f, screen, &mut st);
+                if let Mode::Menu { state } = &mut self.mode {
+                    *state = st;
+                }
+            }
             Mode::LayoutEdit { .. } => {}
             Mode::PaletteEdit { .. } => self.draw_palette_editor(f, screen),
             Mode::Settings { state, capturing } => {

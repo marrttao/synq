@@ -8,6 +8,7 @@ mod keys_view;
 mod layout;
 mod layout_view;
 mod lyrics_view;
+mod menu_view;
 mod palette;
 mod palette_view;
 mod player;
@@ -33,7 +34,7 @@ use ratatui::widgets::ListState;
 use crate::config::Config;
 use crate::db::Track;
 use crate::hotkeys::Hotkeys;
-use crate::keys::Keymap;
+use crate::keys::{self, Keymap};
 use crate::library::LibraryEvent;
 use crate::lyrics;
 use crate::playlists::{self, PlaylistInfo, Target};
@@ -54,6 +55,10 @@ const FRAME: Duration = Duration::from_millis(33);
 const PAGE: usize = 10;
 const TABS: [&str; 3] = ["Library", "Playlists", "Favorites"];
 const MAX_INPUT: usize = 100;
+/// Shown in the bottom bar while there is no message.
+const HINT: &str = "Space play/pause | n/p track | Left/Right seek | ? help | F10 menu";
+/// How long a message stays before the hint comes back.
+const STATUS_LIFE: Duration = Duration::from_secs(6);
 
 /// What the left panel is showing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,8 +109,14 @@ enum Mode {
         playlist: Option<(i64, String)>,
         to_playlist: bool,
     },
-    /// The key list.
-    Help,
+    /// The key list; `scroll` is how many lines are off the top.
+    Help {
+        scroll: u16,
+    },
+    /// Everything the player can do, in one list (F10).
+    Menu {
+        state: ListState,
+    },
     /// Editing the colors; `typing` holds a hex value being entered.
     PaletteEdit {
         draft: palette::Palette,
@@ -116,6 +127,7 @@ enum Mode {
     LayoutEdit {
         draft: Layout,
         selected: usize,
+        drag: Option<layout_view::Drag>,
     },
     /// Choosing keys; `capturing` waits for the next key press.
     Settings {
@@ -151,6 +163,14 @@ pub struct App {
     should_quit: bool,
     /// One-line message shown in the bottom bar (errors, hints).
     status: String,
+    /// What `status` was at the last frame, and since when: old messages
+    /// give way to the key hints.
+    status_seen: String,
+    status_since: Instant,
+    /// Track that was playing at the last frame (the list follows it).
+    last_now: Option<i64>,
+    /// Set when a real terminal is attached (mouse capture and so on).
+    real_terminal: bool,
     library_rx: Receiver<LibraryEvent>,
     tracks: Vec<Track>,
     track_index: HashMap<i64, usize>,
@@ -188,6 +208,8 @@ pub struct App {
     layouts: LayoutSet,
     /// Width of the last frame, to freeze the classic layout for editing.
     screen_width: u16,
+    /// The area the panels are laid out in, as of the last frame.
+    layout_main: ratatui::layout::Rect,
     hotkeys: Option<Hotkeys>,
     /// Makes the library worker rescan `music/` at once.
     library_refresh: Option<Sender<()>>,
@@ -208,7 +230,11 @@ impl App {
         Self {
             theme: Theme::from_config(&config.theme),
             should_quit: false,
-            status: status.unwrap_or_else(|| "q: quit".into()),
+            status: status.unwrap_or_else(|| HINT.into()),
+            status_seen: String::new(),
+            status_since: Instant::now(),
+            last_now: None,
+            real_terminal: false,
             library_rx,
             tracks: Vec::new(),
             track_index: HashMap::new(),
@@ -241,6 +267,7 @@ impl App {
             keymap: Keymap::defaults(),
             layouts: LayoutSet::presets_only(),
             screen_width: 120,
+            layout_main: ratatui::layout::Rect::ZERO,
             hotkeys: None,
             library_refresh: None,
         }
@@ -270,6 +297,7 @@ impl App {
         self.keymap = keymap;
         self.hotkeys = hotkeys;
         self.library_refresh = Some(library_refresh);
+        self.real_terminal = true;
         self.sync_hotkeys();
         self
     }
@@ -286,6 +314,8 @@ impl App {
             if let Some(err) = self.player.poll() {
                 self.status = err;
             }
+            self.follow_playing();
+            self.age_status();
             self.sync_lyrics_request();
             self.tick_whisper();
             self.tick_visuals();
@@ -481,9 +511,20 @@ impl App {
 
     fn handle_event(&mut self, ev: Event) {
         // Windows reports both press and release; only react to presses.
-        let Event::Key(key) = ev else { return };
+        let mut key = match ev {
+            Event::Key(k) => k,
+            Event::Mouse(m) => return self.mouse_event(m),
+            _ => return,
+        };
         if key.kind != KeyEventKind::Press {
             return;
+        }
+        // A Russian layout works too: every letter acts as the Latin key
+        // in the same place.
+        if matches!(self.mode, Mode::Normal)
+            && let KeyCode::Char(c) = key.code
+        {
+            key.code = KeyCode::Char(keys::latin_for(c));
         }
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             self.should_quit = true;
@@ -496,7 +537,8 @@ impl App {
             Mode::Confirm { .. } => self.key_confirm(key),
             Mode::Pick { .. } => self.key_pick(key),
             Mode::GifPick { .. } => self.key_gif_pick(key),
-            Mode::Help => self.mode = Mode::Normal,
+            Mode::Help { .. } => self.key_help(key),
+            Mode::Menu { .. } => self.key_menu(key),
             Mode::Settings { .. } => self.key_settings(key),
             Mode::LayoutEdit { .. } => self.key_layout_edit(key),
             Mode::PaletteEdit { .. } => self.key_palette_edit(key),
@@ -536,15 +578,40 @@ impl App {
             KeyCode::Char('t') => self.recognize_or_retry(),
             KeyCode::Char('a') => self.start_pick(),
             KeyCode::Char('g') => self.start_gif_pick(),
-            KeyCode::Char('?') => self.mode = Mode::Help,
+            KeyCode::Char('?') | KeyCode::F(1) => self.mode = Mode::Help { scroll: 0 },
+            KeyCode::F(10) => self.open_menu(),
+            KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => self.open_menu(),
             KeyCode::Char('S') => self.open_settings(),
             KeyCode::Char('E') => self.open_layout_editor(),
             KeyCode::Char('C') => self.open_palette_editor(),
-            KeyCode::Char('T') => self.next_theme(),
             KeyCode::Char('c') => self.start_create(),
             KeyCode::Char('e') => self.start_rename(),
             KeyCode::Char('d') | KeyCode::Delete => self.delete_selected(),
             _ => {}
+        }
+    }
+
+    /// The highlighted row follows what plays, so that "selected" and
+    /// "playing" are the same track unless the user moves away.
+    fn follow_playing(&mut self) {
+        let now = self.player.now_id;
+        if now == self.last_now {
+            return;
+        }
+        self.last_now = now;
+        let Some(id) = now else { return };
+        let position = self.view_tracks().iter().position(|t| t.id == id);
+        if let Some(i) = position {
+            self.lists[self.view().slot()].select(Some(i));
+        }
+    }
+
+    fn age_status(&mut self) {
+        if self.status != self.status_seen {
+            self.status_seen.clone_from(&self.status);
+            self.status_since = Instant::now();
+        } else if self.status != HINT && self.status_since.elapsed() > STATUS_LIFE {
+            self.status = HINT.into();
         }
     }
 
@@ -600,11 +667,11 @@ impl App {
         }
     }
 
-    fn seek(&mut self, forward: bool) {
+    fn seek(&mut self, forward: bool, big: bool) {
         let duration = self
             .now_playing()
             .map_or(Duration::ZERO, |t| Duration::from_millis(t.duration_ms));
-        self.player.seek(forward, duration);
+        self.player.seek(forward, big, duration);
     }
 
     /// Track the favorite/playlist keys act on: the selected one, else the
@@ -622,7 +689,18 @@ impl App {
             return;
         };
         let target = Target::Favorites;
-        self.playlists.send(if self.favorite_set.contains(&track) {
+        let name = self
+            .track_index
+            .get(&track)
+            .map(|&i| format!("{} - {}", self.tracks[i].artist, self.tracks[i].title))
+            .unwrap_or_default();
+        let remove = self.favorite_set.contains(&track);
+        self.status = if remove {
+            format!("Removed from favorites: {name}")
+        } else {
+            format!("Added to favorites: {name}")
+        };
+        self.playlists.send(if remove {
             playlists::Command::Remove { target, track }
         } else {
             playlists::Command::Add { target, track }
@@ -887,7 +965,7 @@ mod tests {
 
         // Favorite the first track from the Library tab.
         key(&mut app, KeyCode::BackTab);
-        key(&mut app, KeyCode::Char('f'));
+        key(&mut app, KeyCode::Char('*'));
         wait(&mut app, "favorite added", |a| a.favorites.len() == 1);
         assert!(paths.favorites.join("alpha.wav").is_file());
 

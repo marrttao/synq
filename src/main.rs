@@ -75,6 +75,11 @@ fn main() -> Result<()> {
     .with_palettes(palettes)
     .with_system(keymap, hotkeys, library_refresh)
     .run(&mut terminal);
+    // The layout editor turns the mouse on; make sure it is off again.
+    let _ = ratatui::crossterm::execute!(
+        std::io::stdout(),
+        ratatui::crossterm::event::DisableMouseCapture
+    );
     ratatui::restore();
 
     if let Err(e) = &result {
