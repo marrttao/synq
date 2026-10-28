@@ -33,6 +33,7 @@ pub enum Action {
     PictureZoomIn,
     PictureZoomOut,
     Refresh,
+    SoundStyle,
     NextLayout,
     PrevLayout,
     NextPalette,
@@ -40,7 +41,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 27] = [
+    pub const ALL: [Action; 28] = [
         Action::PlayPause,
         Action::Next,
         Action::Prev,
@@ -63,6 +64,7 @@ impl Action {
         Action::PictureFit,
         Action::PictureZoomIn,
         Action::PictureZoomOut,
+        Action::SoundStyle,
         Action::NextLayout,
         Action::PrevLayout,
         Action::NextPalette,
@@ -96,6 +98,7 @@ impl Action {
             Action::PictureZoomIn => "picture_zoom_in",
             Action::PictureZoomOut => "picture_zoom_out",
             Action::Refresh => "refresh",
+            Action::SoundStyle => "sound_style",
             Action::NextLayout => "next_layout",
             Action::PrevLayout => "prev_layout",
             Action::NextPalette => "next_palette",
@@ -128,6 +131,7 @@ impl Action {
             Action::PictureZoomIn => "Picture bigger (crop more)",
             Action::PictureZoomOut => "Picture smaller (crop less)",
             Action::Refresh => "Refresh everything",
+            Action::SoundStyle => "Sound: bars / mirror",
             Action::NextLayout => "Next layout",
             Action::PrevLayout => "Previous layout",
             Action::NextPalette => "Next colors",
@@ -161,6 +165,7 @@ impl Action {
             Action::PictureZoomIn => plain(KeyCode::Char('z')),
             Action::PictureZoomOut => plain(KeyCode::Char('Z')),
             Action::Refresh => plain(KeyCode::F(5)),
+            Action::SoundStyle => plain(KeyCode::Char('x')),
             Action::NextLayout => plain(KeyCode::Char('}')),
             Action::PrevLayout => plain(KeyCode::Char('{')),
             Action::NextPalette => plain(KeyCode::Char(')')),
@@ -599,7 +604,7 @@ mod tests {
         let key = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
         assert_eq!(map.action_for(key('n')), Some(Action::Next));
         assert_eq!(map.action_for(key(' ')), Some(Action::PlayPause));
-        assert_eq!(map.action_for(key('x')), None);
+        assert_eq!(map.action_for(key('y')), None);
     }
 
     #[test]

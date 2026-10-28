@@ -769,6 +769,7 @@ fn the_sound_panel_is_in_the_standard_layouts_and_draws_bars() {
     // With a signal the bars have height; without one they are empty.
     let buf_with = |app: &mut App, level: f32| {
         app.spectrum.bands = [level; super::spectrum::BANDS];
+        app.spectrum.peaks = [level; super::spectrum::BANDS];
         let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
         t.draw(|f| app.draw(f)).unwrap();
         t.backend()
@@ -782,4 +783,40 @@ fn the_sound_panel_is_in_the_standard_layouts_and_draws_bars() {
     };
     assert_eq!(buf_with(&mut app, 0.0), 0);
     assert!(buf_with(&mut app, 1.0) > 20);
+}
+
+#[test]
+fn the_sound_panel_has_a_mirror_style_and_x_switches_it() {
+    let (_tmp, _paths, mut app) = setup_with_db();
+    assert_eq!(app.sound_style, viz_view::SoundStyle::Bars);
+    key(&mut app, KeyCode::Char('x'));
+    assert_eq!(app.sound_style, viz_view::SoundStyle::Mirror);
+    assert!(app.status.contains("mirror"), "{}", app.status);
+    app.spectrum.bands = [1.0; super::spectrum::BANDS];
+    app.spectrum.peaks = [1.0; super::spectrum::BANDS];
+    let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
+    t.draw(|f| app.draw(f)).unwrap();
+    let buf = t.backend().buffer().clone();
+    // Full-height bars reach both the top and the bottom of the panel's
+    // area symmetrically: count full blocks in the upper and lower half of
+    // the rows the panel occupies.
+    let full: Vec<(u16, u16)> = (0..buf.area.height)
+        .flat_map(|y| (0..buf.area.width).map(move |x| (x, y)))
+        .filter(|&(x, y)| buf[(x, y)].symbol() == "\u{2588}")
+        .collect();
+    assert!(full.len() > 40, "{}", full.len());
+    let (min, max) = (
+        full.iter().map(|p| p.1).min().unwrap(),
+        full.iter().map(|p| p.1).max().unwrap(),
+    );
+    let mid = (min + max) / 2;
+    let upper = full.iter().filter(|p| p.1 <= mid).count();
+    let lower = full.len() - upper;
+    assert!(
+        upper.abs_diff(lower) <= full.len() / 6,
+        "{upper} vs {lower}"
+    );
+    for (w, h) in [(60, 20), (30, 8), (10, 4), (1, 1)] {
+        screen_text(&mut app, w, h);
+    }
 }

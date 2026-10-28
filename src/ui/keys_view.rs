@@ -52,6 +52,10 @@ impl App {
                 self.status = format!("Picture: {}", self.visual.fit.label());
             }
             Action::Refresh => self.refresh(),
+            Action::SoundStyle => {
+                self.sound_style = self.sound_style.cycle();
+                self.status = format!("Sound: {}", self.sound_style.label());
+            }
             Action::NextLayout => self.step_layout(true),
             Action::PrevLayout => self.step_layout(false),
             Action::NextPalette => self.step_theme(true),

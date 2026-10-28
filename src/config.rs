@@ -34,6 +34,8 @@ pub struct UiConfig {
     pub animations: bool,
     /// How solid the dark backdrop behind the lyrics is, 0-100 percent.
     pub lyrics_backdrop: u8,
+    /// The Sound panel: "bars" or "mirror" (key x switches).
+    pub sound_style: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -102,6 +104,7 @@ impl Default for UiConfig {
         Self {
             animations: true,
             lyrics_backdrop: 80,
+            sound_style: "bars".into(),
         }
     }
 }
@@ -168,6 +171,8 @@ pub const DEFAULT_TOML: &str = r##"# synq settings. Delete a line to get its def
 animations = true
 # Dark backdrop behind the lyrics over a picture, 0 (none) - 100 (solid).
 lyrics_backdrop = 80
+# The Sound panel: "bars" or "mirror" (key x switches).
+sound_style = "bars"
 
 [theme]
 # Built-in colors: default / nord / gruvbox / light / mono (press T to try them).

@@ -1,20 +1,39 @@
 //! The sound spectrum for the visualizer: an FFT of the latest samples,
-//! folded into bands on a logarithmic frequency scale, with the quick rise
-//! and slow fall that make bars pleasant to look at.
+//! folded into bands on a logarithmic frequency scale, then made pleasant:
+//! the level adapts to the loudness of the music (so quiet and loud tracks
+//! both fill the panel), neighbouring bands are smoothed into each other,
+//! and bars rise quickly, fall slowly and leave a falling peak mark.
 
 use crate::audio::scope::Scope;
 
 pub const BANDS: usize = 64;
-const FFT_SIZE: usize = 2048;
-const LOW_HZ: f32 = 35.0;
+const FFT_SIZE: usize = 4096;
+const LOW_HZ: f32 = 30.0;
 const HIGH_HZ: f32 = 16_000.0;
+/// Lift per octave: music loses about this much towards the treble.
+const TILT_DB_PER_OCTAVE: f32 = 4.0;
+/// How many dB below the loudest recent level still show.
+const RANGE_DB: f32 = 50.0;
+/// The reference level never goes below this, so silence stays flat and
+/// very quiet music is not blown up into noise.
+const MIN_REF_DB: f32 = -28.0;
+/// How fast the reference level sinks when the music gets quieter, per frame.
+const REF_FALL_DB: f32 = 0.06;
+/// How far a bar moves towards a louder level in one frame.
+const ATTACK: f32 = 0.65;
 /// How much of a bar is left after one frame without a louder sound.
-const FALL: f32 = 0.84;
-/// Quietest level shown, in dB (full scale is 0).
-const FLOOR_DB: f32 = -70.0;
+const FALL: f32 = 0.88;
+/// Frames a peak mark stays before it falls, and how fast it falls.
+const PEAK_HOLD: u8 = 14;
+const PEAK_FALL: f32 = 0.025;
 
 pub struct Spectrum {
+    /// Bar heights, 0 to 1.
     pub bands: [f32; BANDS],
+    /// Peak marks, 0 to 1.
+    pub peaks: [f32; BANDS],
+    hold: [u8; BANDS],
+    reference_db: f32,
     last_push: u64,
 }
 
@@ -22,6 +41,9 @@ impl Default for Spectrum {
     fn default() -> Self {
         Self {
             bands: [0.0; BANDS],
+            peaks: [0.0; BANDS],
+            hold: [0; BANDS],
+            reference_db: MIN_REF_DB,
             last_push: 0,
         }
     }
@@ -37,18 +59,57 @@ impl Spectrum {
         match fresh {
             Some((samples, rate, pushes)) => {
                 self.last_push = pushes;
-                let now = analyze(&samples, rate);
-                for (old, new) in self.bands.iter_mut().zip(now) {
-                    *old = new.max(*old * FALL);
-                }
+                self.take(&levels_db(&samples, rate));
             }
-            None => self.bands.iter_mut().for_each(|b| *b *= FALL),
+            None => self.sink(),
+        }
+        self.mark_peaks();
+    }
+
+    /// Feed one frame of levels (in dB).
+    fn take(&mut self, db: &[f32; BANDS]) {
+        // Mix with the neighbours first: smooth, even bars instead of spikes.
+        let mut smooth = [0.0f32; BANDS];
+        for (b, slot) in smooth.iter_mut().enumerate() {
+            let left = db[b.saturating_sub(1)];
+            let right = db[(b + 1).min(BANDS - 1)];
+            *slot = 0.2 * left + 0.6 * db[b] + 0.2 * right;
+        }
+        // The loudest band of the moment sets the scale (slowly sinking).
+        let loudest = smooth.iter().copied().fold(f32::MIN, f32::max);
+        self.reference_db = loudest.max(self.reference_db - REF_FALL_DB).max(MIN_REF_DB);
+        let floor = self.reference_db - RANGE_DB;
+        for (bar, &db) in self.bands.iter_mut().zip(&smooth) {
+            let level = ((db - floor) / RANGE_DB).clamp(0.0, 1.0);
+            *bar = if level > *bar {
+                *bar + (level - *bar) * ATTACK
+            } else {
+                *bar * FALL
+            };
+        }
+    }
+
+    fn sink(&mut self) {
+        self.bands.iter_mut().for_each(|b| *b *= FALL);
+    }
+
+    fn mark_peaks(&mut self) {
+        for b in 0..BANDS {
+            if self.bands[b] >= self.peaks[b] {
+                self.peaks[b] = self.bands[b];
+                self.hold[b] = PEAK_HOLD;
+            } else if self.hold[b] > 0 {
+                self.hold[b] -= 1;
+            } else {
+                self.peaks[b] = (self.peaks[b] - PEAK_FALL).max(self.bands[b]);
+            }
         }
     }
 }
 
-/// `BANDS` levels (0 to 1) for `samples` (`FFT_SIZE` mono samples).
-pub fn analyze(samples: &[f32], rate: u32) -> [f32; BANDS] {
+/// The level of every band in dB (about 0 for a full-scale tone, with the
+/// treble lift applied), for `FFT_SIZE` mono samples.
+pub fn levels_db(samples: &[f32], rate: u32) -> [f32; BANDS] {
     let mut re = vec![0.0f32; FFT_SIZE];
     let mut im = vec![0.0f32; FFT_SIZE];
     let n = samples.len().min(FFT_SIZE);
@@ -58,6 +119,7 @@ pub fn analyze(samples: &[f32], rate: u32) -> [f32; BANDS] {
         re[i] = s * w;
     }
     fft(&mut re, &mut im);
+    let magnitude = |k: usize| (re[k] * re[k] + im[k] * im[k]).sqrt();
 
     let bin_hz = rate as f32 / FFT_SIZE as f32;
     let high = HIGH_HZ.min(rate as f32 * 0.45);
@@ -65,18 +127,25 @@ pub fn analyze(samples: &[f32], rate: u32) -> [f32; BANDS] {
     for (b, slot) in out.iter_mut().enumerate() {
         let edge = |i: usize| LOW_HZ * (high / LOW_HZ).powf(i as f32 / BANDS as f32);
         let (f0, f1) = (edge(b), edge(b + 1));
-        let lo = ((f0 / bin_hz).floor() as usize).max(1);
-        let hi = ((f1 / bin_hz).ceil() as usize).clamp(lo + 1, FFT_SIZE / 2);
-        let peak = (lo..hi)
-            .map(|k| (re[k] * re[k] + im[k] * im[k]).sqrt())
-            .fold(0.0f32, f32::max);
+        let center = (f0 * f1).sqrt();
+        let (lo, hi) = (f0 / bin_hz, f1 / bin_hz);
+        let peak = if hi - lo >= 2.0 {
+            // Many bins: the loudest of them.
+            (lo.floor() as usize..hi.ceil() as usize)
+                .map(|k| magnitude(k.clamp(1, FFT_SIZE / 2)))
+                .fold(0.0f32, f32::max)
+        } else {
+            // Less than a bin or two (the low end): interpolate between the
+            // neighbouring bins, so that the bars there are not steps.
+            let pos = center / bin_hz;
+            let k = (pos.floor() as usize).clamp(1, FFT_SIZE / 2 - 1);
+            let t = (pos - k as f32).clamp(0.0, 1.0);
+            magnitude(k) * (1.0 - t) + magnitude(k + 1) * t
+        };
         // A sine of amplitude A gives a peak of about A * N / 4 after the window.
         let amplitude = peak / (FFT_SIZE as f32 / 4.0);
-        let center = (f0 * f1).sqrt();
-        // Music falls off towards the treble; lift it so that all of it moves.
-        let tilt = 3.0 * (center / 1000.0).log2();
-        let db = 20.0 * (amplitude + 1e-7).log10() + tilt;
-        *slot = ((db - FLOOR_DB) / -FLOOR_DB).clamp(0.0, 1.0);
+        let tilt = TILT_DB_PER_OCTAVE * (center / 1000.0).log2();
+        *slot = 20.0 * (amplitude + 1e-7).log10() + tilt;
     }
     out
 }
@@ -130,8 +199,8 @@ mod tests {
             .collect()
     }
 
-    fn loudest(bands: &[f32; BANDS]) -> usize {
-        (0..BANDS)
+    fn loudest(bands: &[f32]) -> usize {
+        (0..bands.len())
             .max_by(|&a, &b| bands[a].total_cmp(&bands[b]))
             .unwrap_or(0)
     }
@@ -142,55 +211,82 @@ mod tests {
         ((hz / LOW_HZ).ln() / (high / LOW_HZ).ln() * BANDS as f32) as usize
     }
 
+    /// A few frames of a signal through the whole pipeline.
+    fn settle(samples: &[f32], rate: u32) -> Spectrum {
+        let mut s = Spectrum::default();
+        for _ in 0..30 {
+            s.take(&levels_db(samples, rate));
+            s.mark_peaks();
+        }
+        s
+    }
+
     #[test]
     fn a_tone_lights_the_band_of_its_frequency() {
         for hz in [100.0, 440.0, 1000.0, 5000.0, 12_000.0] {
-            let bands = analyze(&sine(hz, 44_100, 0.5), 44_100);
-            let got = loudest(&bands);
+            let db = levels_db(&sine(hz, 44_100, 0.5), 44_100);
+            let got = loudest(&db);
             let want = band_of(hz, 44_100);
-            // Low notes are wider than a band (the FFT is coarse down there)
-            // and the treble lift favors the upper neighbours a little.
-            let slack = if hz < 200.0 { 4 } else { 1 };
+            let slack = if hz < 200.0 { 3 } else { 1 };
             assert!(
                 got.abs_diff(want) <= slack,
                 "{hz} Hz: band {got}, expected {want}"
             );
-            assert!(bands[got] > 0.6, "{hz} Hz: level {}", bands[got]);
-            assert!(
-                bands[want] > bands[got] - 0.15,
-                "{hz} Hz: its own band is lit"
-            );
+            assert!(db[want] > db[got] - 3.0, "{hz} Hz: its own band is lit");
         }
     }
 
     #[test]
-    fn silence_is_flat_and_louder_means_higher() {
-        assert!(analyze(&[0.0; FFT_SIZE], 44_100).iter().all(|&b| b == 0.0));
-        let quiet = analyze(&sine(440.0, 44_100, 0.02), 44_100);
-        let loud = analyze(&sine(440.0, 44_100, 0.8), 44_100);
+    fn silence_is_flat_and_quiet_music_still_fills_the_panel() {
+        let silent = settle(&[0.0; FFT_SIZE], 44_100);
+        assert!(silent.bands.iter().all(|&b| b == 0.0));
         let band = band_of(440.0, 44_100);
-        assert!(loud[band] > quiet[band] + 0.2);
-        assert!(loud.iter().all(|&b| (0.0..=1.0).contains(&b)));
+        // Loud and quiet tracks both reach the top: the level adapts.
+        let quiet = settle(&sine(440.0, 44_100, 0.03), 44_100);
+        let loud = settle(&sine(440.0, 44_100, 0.9), 44_100);
+        let top = |s: &Spectrum| s.bands.iter().copied().fold(0.0f32, f32::max);
+        assert!(top(&quiet) > 0.55, "quiet tops at {}", top(&quiet));
+        assert!(quiet.bands[band] > 0.4, "{}", quiet.bands[band]);
+        assert!(loud.bands[band] > 0.9, "{}", loud.bands[band]);
+        assert!(loud.bands.iter().all(|&b| (0.0..=1.0).contains(&b)));
         // Short input and odd rates do not break it.
-        analyze(&[0.1; 10], 8000);
-        analyze(&[], 48_000);
+        levels_db(&[0.1; 10], 8000);
+        levels_db(&[], 48_000);
     }
 
     #[test]
-    fn bars_rise_at_once_and_fall_slowly_and_stop_with_the_music() {
+    fn neighbouring_bands_move_together() {
+        // A single tone lights its band and the two beside it, softly.
+        let s = settle(&sine(1000.0, 44_100, 0.5), 44_100);
+        let at = loudest(&s.bands);
+        assert!(s.bands[at] > 0.9);
+        assert!(s.bands[at - 1] > 0.1 && s.bands[at - 1] < s.bands[at]);
+        assert!(s.bands[at + 1] > 0.1 && s.bands[at + 1] < s.bands[at]);
+        assert!(s.bands[at + 8] < 0.2, "far bands stay low");
+    }
+
+    #[test]
+    fn bars_rise_at_once_fall_slowly_and_stop_with_the_music() {
         let scope = Scope::new();
         let mut spectrum = Spectrum::default();
         scope.feed(&sine(440.0, 44_100, 0.5), 44_100);
+        // The scope needs a full window before anything shows.
+        for _ in 0..3 {
+            scope.feed(&sine(440.0, 44_100, 0.5), 44_100);
+        }
         spectrum.update(&scope, true);
         let band = band_of(440.0, 44_100);
         let peak = spectrum.bands[band];
-        assert!(peak > 0.6);
+        assert!(peak > 0.4, "{peak}");
         // Nothing new arrives (paused): the bars sink, never jump.
         spectrum.update(&scope, true);
         assert!(spectrum.bands[band] < peak && spectrum.bands[band] > peak * 0.5);
-        for _ in 0..60 {
+        // The peak mark stays up while the bar sinks.
+        assert!(spectrum.peaks[band] >= peak - 1e-6);
+        for _ in 0..80 {
             spectrum.update(&scope, false);
         }
         assert!(spectrum.bands.iter().all(|&b| b < 0.01));
+        assert!(spectrum.peaks.iter().all(|&p| p < 0.2), "peaks fall too");
     }
 }
