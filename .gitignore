@@ -7,3 +7,7 @@
 /favorites/
 /data/
 /config.toml
+
+# own fonts (may carry personal-use licenses)
+/fonts/
+/assets/fonts/*PERSONAL*

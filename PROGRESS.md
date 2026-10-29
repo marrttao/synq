@@ -105,7 +105,7 @@
 - 143 теста (+115 без фичи), clippy без предупреждений в обеих конфигурациях.
 
 Что нужно для сборки с Whisper (пойдёт в README, этап 9):
-- Windows: Visual Studio Build Tools (C++), CMake (есть в составе Visual Studio) и **libclang** (LLVM) — для bindgen. На этой машине LLVM-установщик требовал прав администратора, поэтому `libclang.dll` взят из официального пакета PyPI `libclang` и лежит вне проекта в `C:\Users\Sylvanas\.tools\libclang`; сборка идёт с `LIBCLANG_PATH` на эту папку и CMake из Visual Studio в `PATH`.
+- Windows: Visual Studio Build Tools (C++), CMake (есть в составе Visual Studio) и **libclang** (LLVM) — для bindgen. На этой машине LLVM-установщик требовал прав администратора, поэтому `libclang.dll` взят из официального пакета PyPI `libclang` и лежит вне проекта в `папке `.tools\libclang` в домашней папке`; сборка идёт с `LIBCLANG_PATH` на эту папку и CMake из Visual Studio в `PATH`.
 - Linux: `build-essential cmake libclang-dev` (+ `libasound2-dev` для звука).
 - Заранее сгенерированные биндинги whisper-rs-sys собраны под Linux и на Windows не подходят, поэтому обходить bindgen нельзя.
 

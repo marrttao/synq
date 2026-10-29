@@ -47,6 +47,11 @@ fn main() -> Result<()> {
     let mut terminal = ratatui::try_init().context("cannot initialize the terminal")?;
     let (library_rx, library_refresh) =
         library::spawn_refreshable(paths.music.clone(), paths.db.clone());
+    let _ = std::fs::create_dir_all(paths.base.join("fonts"));
+    ui::load_user_fonts(&[
+        paths.base.join("fonts"),
+        paths.base.join("assets").join("fonts"),
+    ]);
     let (keymap, keys_problem) = keys::Keymap::load(paths.db.clone());
     let (layouts, layouts_problem) = ui::LayoutSet::load(paths.db.clone());
     let (prefs, prefs_problem) = ui::Prefs::load(paths.db.clone());

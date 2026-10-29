@@ -46,6 +46,7 @@ use crate::lyrics;
 use crate::playlists::{self, PlaylistInfo, Target};
 use crate::transcribe;
 use crate::visuals;
+pub use bigtext::load_user_fonts;
 use effects::Effects;
 use layout::Layout;
 pub use layout::LayoutSet;

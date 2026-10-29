@@ -1,5 +1,6 @@
-//! Big, smooth text for the "word" lyrics mode: a real font (embedded,
-//! SIL Open Font License, see assets/fonts) rasterized to the size of the
+//! Big, smooth text for the "word" lyrics mode: a real font (two are
+//! embedded, SIL Open Font License, see assets/fonts; more are read from the
+//! `fonts` folder) rasterized to the size of the
 //! panel and drawn with quadrant characters (2 x 2 picture pixels per cell).
 
 use std::sync::OnceLock;
@@ -18,12 +19,88 @@ pub enum FontKind {
     Lobster,
     /// A tall clean grotesque.
     Oswald,
+    /// A font the user put into the `fonts` folder (index into the list).
+    User(usize),
+}
+
+struct UserFont {
+    /// Lowercase, as saved in the settings.
+    name: String,
+    label: String,
+    font: Font,
+}
+
+static USER_FONTS: OnceLock<Vec<UserFont>> = OnceLock::new();
+
+fn user_fonts() -> &'static [UserFont] {
+    USER_FONTS.get().map_or(&[], Vec::as_slice)
+}
+
+/// A readable name from a file name: "Birds of Paradise (junk) PERSONAL USE
+/// ONLY" becomes "Birds of Paradise" (cut at the first odd character).
+fn font_label(stem: &str) -> String {
+    let clean: String = stem
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_'))
+        .collect();
+    let clean = clean.trim().replace('_', " ");
+    if clean.is_empty() {
+        stem.trim().to_owned()
+    } else {
+        clean
+    }
+}
+
+/// Fonts (`.ttf`, `.otf`) found in `dirs`, usable as one-word fonts after the
+/// built-in ones. Call once, at the start; later calls change nothing.
+pub fn load_user_fonts(dirs: &[std::path::PathBuf]) {
+    let _ = USER_FONTS.set(read_fonts(dirs));
+}
+
+fn read_fonts(dirs: &[std::path::PathBuf]) -> Vec<UserFont> {
+    let mut found: Vec<UserFont> = Vec::new();
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        let mut files: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+        files.sort();
+        for path in files {
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_ascii_lowercase);
+            if !matches!(ext.as_deref(), Some("ttf" | "otf")) {
+                continue;
+            }
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("font");
+            let label = font_label(stem);
+            let name = label.to_lowercase();
+            // The built-in ones also lie in assets/fonts; same name twice is skipped.
+            if matches!(name.as_str(), "lobster" | "lobster-regular" | "oswald")
+                || found.iter().any(|f| f.name == name)
+            {
+                continue;
+            }
+            let font = std::fs::read(&path)
+                .ok()
+                .and_then(|bytes| Font::from_bytes(bytes, FontSettings::default()).ok());
+            match font {
+                Some(font) => found.push(UserFont { name, label, font }),
+                None => tracing::warn!("cannot use the font {}", path.display()),
+            }
+        }
+    }
+    found
 }
 
 impl FontKind {
     pub fn from_config(name: &str) -> Self {
-        if name.trim().eq_ignore_ascii_case("oswald") {
+        let name = name.trim().to_lowercase();
+        if name == "oswald" {
             Self::Oswald
+        } else if let Some(i) = user_fonts().iter().position(|f| f.name == name) {
+            Self::User(i)
         } else {
             Self::Lobster
         }
@@ -32,7 +109,10 @@ impl FontKind {
     pub fn cycle(self) -> Self {
         match self {
             Self::Lobster => Self::Oswald,
-            Self::Oswald => Self::Lobster,
+            Self::Oswald if user_fonts().is_empty() => Self::Lobster,
+            Self::Oswald => Self::User(0),
+            Self::User(i) if i + 1 < user_fonts().len() => Self::User(i + 1),
+            Self::User(_) => Self::Lobster,
         }
     }
 
@@ -40,6 +120,7 @@ impl FontKind {
         match self {
             Self::Lobster => "lobster",
             Self::Oswald => "oswald",
+            Self::User(i) => user_fonts().get(i).map_or("lobster", |f| f.name.as_str()),
         }
     }
 
@@ -47,6 +128,7 @@ impl FontKind {
         match self {
             Self::Lobster => "Lobster",
             Self::Oswald => "Oswald",
+            Self::User(i) => user_fonts().get(i).map_or("Lobster", |f| f.label.as_str()),
         }
     }
 
@@ -56,6 +138,7 @@ impl FontKind {
         let (cell, bytes) = match self {
             Self::Lobster => (&LOBSTER_FONT, LOBSTER),
             Self::Oswald => (&OSWALD_FONT, OSWALD),
+            Self::User(i) => return user_fonts().get(i).map(|f| &f.font),
         };
         cell.get_or_init(|| Font::from_bytes(bytes, FontSettings::default()).ok())
             .as_ref()
@@ -315,6 +398,19 @@ mod tests {
                 .iter()
                 .any(|c| c.fg == Color::Rgb(255, 255, 255))
         );
+    }
+
+    #[test]
+    fn fonts_from_a_folder_are_named_and_skip_the_built_in_ones() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("Cool Font \u{2555} PERSONAL.ttf"), OSWALD).unwrap();
+        std::fs::write(tmp.path().join("Oswald.ttf"), OSWALD).unwrap();
+        std::fs::write(tmp.path().join("broken.ttf"), b"nope").unwrap();
+        std::fs::write(tmp.path().join("notes.txt"), b"x").unwrap();
+        let found = read_fonts(&[tmp.path().to_path_buf(), tmp.path().join("missing")]);
+        let names: Vec<&str> = found.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["cool font"]);
+        assert_eq!(found[0].label, "Cool Font");
     }
 
     #[test]
