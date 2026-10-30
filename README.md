@@ -2,29 +2,31 @@
 
 # synq
 
-**Терминальный музыкальный плеер с живыми текстами песен, гифками и визуализатором звука**
+**A terminal music player with live lyrics, GIFs and a sound visualizer**
 
-Rust · Windows и Linux · работает целиком в терминале
+Rust · Windows and Linux · runs entirely in the terminal
+
+English · [Русский](README.ru.md)
 
 </div>
 
 ---
 
-synq играет вашу музыку, показывает синхронный текст песни (караоке, подсветка слова, а при желании крупно только то слово, которое поётся), ищет тексты сам и рисует рядом гифку и спектр звука. Всё настраивается: раскладка экрана, цвета, клавиши, глобальные горячие клавиши.
+synq plays your music and shows synced lyrics (karaoke-style, with the current word highlighted, or, if you like, just the word being sung in big letters). It finds lyrics on its own and draws a GIF and a sound spectrum next to them. Everything is configurable: the screen layout, colors, keys, and global hotkeys.
 
-## Возможности
+## Features
 
-- **Библиотека:** теги, поиск, плейлисты, избранное; новые файлы подхватываются на лету (`F5`), форматы mp3, flac, wav, ogg, m4a, aac.
-- **Тексты:** `.lrc` рядом с треком, теги, [LRCLIB](https://lrclib.net), а если ничего нет, локальное распознавание Whisper. Режимы «все строки» и «одно слово» крупным шрифтом.
-- **Гифки и картинки:** пикселями (sixel, kitty, iTerm2), блоками или ASCII; режимы fit, fill и stretch; своя гифка у каждого плейлиста.
-- **Визуализатор звука:** ровные столбики со сглаживанием и метками пиков, два стиля.
-- **Редактор раскладки:** панели двигаются и растягиваются мышью или стрелками, их можно убирать и добавлять, класть друг на друга.
-- **Цвета:** палитры из 2-12 цветов и редактор цветов.
-- **Клавиши:** переназначаются; на Windows любую можно сделать глобальной, чтобы переключать трек из полноэкранной игры.
-- **Запоминает всё:** вид, громкость, раскладку, палитру и клавиши между запусками.
-- **Не трогает вашу музыку:** папку `music/` плеер только читает.
+- **Library:** tags, search, playlists, favorites; new files are picked up on the fly (`F5`). Formats: mp3, flac, wav, ogg, m4a, aac.
+- **Lyrics:** a `.lrc` file next to the track, embedded tags, [LRCLIB](https://lrclib.net), and if nothing is found, local Whisper speech recognition. Two display modes: all lines, or one word at a time in a large font.
+- **GIFs and pictures:** as real pixels (sixel, kitty, iTerm2), as blocks, or as ASCII; fit, fill and stretch modes; a separate GIF for each playlist.
+- **Sound visualizer:** even bars with smoothing and peak marks, two styles.
+- **Layout editor:** panels are moved and resized with the mouse or the arrow keys, removed and added back, and can be stacked on top of each other.
+- **Colors:** palettes of 2-12 colors and a color editor.
+- **Keys:** rebindable; on Windows any key can be made global, so you can skip a track from a full-screen game.
+- **Remembers everything:** the view, volume, layout, palette and keys between runs.
+- **Never touches your music:** the player only reads the `music/` folder.
 
-## Быстрый старт
+## Quick start
 
 ```powershell
 git clone https://github.com/marrttao/synq.git
@@ -33,27 +35,27 @@ cd synq
 setx PLAYER_HOME "$PWD"
 ```
 
-Затем откройте новое окно терминала, положите музыку в папку `music/` (и картинки в `gifs/`) и запустите:
+Then open a new terminal window, put your music into the `music/` folder (and pictures into `gifs/`) and run:
 
 ```
 synq
 ```
 
-`F10` открывает меню со всем, что умеет плеер, а `?` показывает все клавиши. На Linux: установите зависимости (ниже) и выполните `cargo run --release`.
+`F10` opens a menu with everything the player can do, and `?` shows all the keys. On Linux, install the dependencies (below) and run `cargo run --release`.
 
-## Что нужно для сборки
+## Requirements for building
 
-Нужен Rust (stable, 1.86 или новее): <https://rustup.rs>.
+You need Rust (stable, 1.86 or newer): <https://rustup.rs>.
 
 ### Windows
 
-1. Rust через `rustup` (или `winget install Rustlang.Rustup`).
-2. **Visual Studio Build Tools** с компонентом «Разработка классических приложений на C++» (MSVC и Windows SDK). Вместе с ним ставится и CMake.
-3. Для распознавания Whisper (включено по умолчанию):
-   - **CMake** (есть в составе Visual Studio, либо `winget install Kitware.CMake`), он должен быть в `PATH`;
-   - **LLVM / libclang** (`winget install LLVM.LLVM`). Если `libclang.dll` лежит в нестандартном месте, задайте переменную `LIBCLANG_PATH` на папку с ним.
+1. Rust via `rustup` (or `winget install Rustlang.Rustup`).
+2. **Visual Studio Build Tools** with the "Desktop development with C++" workload (MSVC and the Windows SDK). CMake comes with it.
+3. For Whisper recognition (on by default):
+   - **CMake** (part of Visual Studio, or `winget install Kitware.CMake`); it must be in `PATH`;
+   - **LLVM / libclang** (`winget install LLVM.LLVM`). If `libclang.dll` lies in a non-standard place, set the `LIBCLANG_PATH` variable to its folder.
 
-Терминал: Windows Terminal (рекомендуется) или любой другой с поддержкой Unicode и цветов.
+Terminal: Windows Terminal (recommended) or any other one with Unicode and color support.
 
 ### Linux (Debian / Ubuntu)
 
@@ -61,275 +63,278 @@ synq
 sudo apt install build-essential pkg-config cmake libclang-dev libasound2-dev
 ```
 
-Для Fedora: `sudo dnf install gcc gcc-c++ make cmake clang-devel alsa-lib-devel`. Для Arch: `sudo pacman -S base-devel cmake clang alsa-lib`.
+Fedora: `sudo dnf install gcc gcc-c++ make cmake clang-devel alsa-lib-devel`. Arch: `sudo pacman -S base-devel cmake clang alsa-lib`.
 
-### Без Whisper
+### Without Whisper
 
-Если распознавание текста не нужно, CMake и libclang не требуются:
+If you do not need speech recognition, CMake and libclang are not required:
 
 ```bash
 cargo run --release --no-default-features
 ```
 
-Плеер полностью работает, просто не умеет распознавать текст сам.
+The player works fully, it just cannot transcribe lyrics by itself.
 
-## Установка команды `synq`
+## Installing the `synq` command
 
-В PowerShell из папки проекта:
+In PowerShell, from the project folder:
 
 ```powershell
 .\install.ps1
 ```
 
-Скрипт сам находит CMake и libclang для Whisper, собирает плеер и ставит команду `synq` (в `~\.cargo\bin`). `.\install.ps1 -NoWhisper` собирает без Whisper. Запущенный `synq` перед этим нужно закрыть. Чтобы плеер брал музыку и настройки из папки проекта, один раз выполните `setx PLAYER_HOME "C:\путь\к\папке\проекта"` и откройте новое окно терминала.
+The script finds CMake and libclang for Whisper, builds the player and installs the `synq` command (into the Cargo bin folder, `~/.cargo/bin`). `.\install.ps1 -NoWhisper` builds without Whisper. A running `synq` must be closed first. To make the player use the music and settings of the project folder, run `setx PLAYER_HOME "C:/path/to/the/project"` once and open a new terminal window.
 
-## Запуск
+## Running
 
 ```bash
 cargo run --release
 ```
 
-Первая сборка с Whisper долгая (компилируется whisper.cpp), следующие быстрые. Готовый бинарник лежит в `target/release/synq` (`synq.exe` на Windows).
+The first build with Whisper is slow (whisper.cpp is compiled), the next ones are fast. The ready binary is at `target/release/synq` (`synq.exe` on Windows).
 
-## Что запоминается
+## What is remembered
 
-Всё, что вы выбрали во время работы, при следующем запуске остаётся: режим картинки (`v`), вписывание и обрезка (`V`, `z`/`Z`), вид текста песни (`w`, шрифт `W`), стиль визуализатора (`x`), показ текста (`l`), громкость, перемешивание и повтор. Раскладки, палитры, клавиши и выбранная гифка запоминаются тоже. Значения из `config.toml` задают только самый первый запуск: запомненный выбор главнее.
+Everything you choose while the player runs is still there at the next start: the picture mode (`v`), fitting and cropping (`V`, `z`/`Z`), the lyrics view (`w`, font `W`), the visualizer style (`x`), whether lyrics are shown (`l`), volume, shuffle and repeat. Layouts, palettes, keys and the chosen GIF are remembered too. Values in `config.toml` only set the very first start: a remembered choice wins.
 
-## Папки
+## Folders
 
-Рабочая папка (BASE) определяется так: переменная окружения `PLAYER_HOME`; иначе папка с программой, если в ней есть `music/`; иначе текущая папка. Недостающие папки создаются сами.
+The working folder (BASE) is found like this: the `PLAYER_HOME` environment variable; otherwise the folder of the program if it contains `music/`; otherwise the current folder. Missing folders are created automatically.
 
 ```
 BASE/
-  music/          музыка (mp3, flac, wav, ogg, m4a, aac); плеер только читает
-  gifs/           ваши картинки: gif, png, jpg
-  playlists/<имя>/  жёсткие ссылки на треки плейлиста (на другом диске копии)
-  favorites/      то же для избранного
+  music/            your music (mp3, flac, wav, ogg, m4a, aac); the player only reads it
+  gifs/             your pictures: gif, png, jpg
+  fonts/            your own fonts for the one-word lyrics (.ttf, .otf)
+  playlists/<name>/ hard links to the tracks of a playlist (copies on another disk)
+  favorites/        the same for favorites
   data/
-    library.db    библиотека, плейлисты, настройки
-    lyrics/       кеш найденных и распознанных текстов
-    models/       модели Whisper
-    logs/         журналы работы (synq.log)
-  config.toml     настройки
+    library.db      library, playlists, settings
+    lyrics/         cache of found and recognized lyrics
+    models/         Whisper models
+    logs/           logs (synq.log)
+  config.toml       settings
 ```
 
-Новые файлы в `music/` подхватываются на лету. Файлы, которые вы удалили из `music/` вручную, просто пропадают из списка (запись о них остаётся в базе на случай, если файл вернётся). Плейлисты и избранное можно смотреть в проводнике: это обычные папки с треками.
+New files in `music/` are picked up on the fly. Files you deleted from `music/` by hand simply disappear from the lists (the database keeps a record of them in case the file comes back). Playlists and favorites can be browsed in the file manager: they are ordinary folders with tracks. The tracks there are hard links, so they take no extra disk space.
 
-## Клавиши
+## Keys
 
-**Не нужно ничего запоминать:** `F10` (или `Ctrl+P`) открывает меню со всем, что умеет плеер, и клавишей рядом с каждым пунктом. `?` или `F1` показывает все клавиши. Внизу всегда подсказка. Клавиши работают и в русской раскладке (каждая буква действует как латинская на том же месте).
+**There is nothing to memorize:** `F10` (or `Ctrl+P`) opens a menu with everything the player can do and the key next to each item. `?` or `F1` shows all the keys. There is always a hint at the bottom. Keys also work in the Russian keyboard layout (each letter acts as the Latin one in the same place).
 
-Подсвеченная строка в списке всегда совпадает с играющим треком: когда трек сменился, подсветка переходит на него. `*` (избранное) и `a` (в плейлист) работают с подсвеченным треком, и плеер называет его в сообщении.
+The highlighted row in a list always matches the playing track: when the track changes, the highlight follows it. `*` (favorite) and `a` (to a playlist) act on the highlighted track, and the player names it in its message.
 
-Клавиши ниже можно переназначить в `S`:
+The keys below can be rebound in `S`:
 
-| Клавиша | Действие |
+| Key | Action |
 |---|---|
-| `Space` | пауза / воспроизведение (если ничего не играет, запускает выбранный трек) |
-| `n` / `p` | следующий / предыдущий трек |
-| `←` / `→` | перемотка на 5 секунд |
-| `Shift+←` / `Shift+→` | перемотка на 30 секунд |
-| `+` / `-` | громкость |
-| `s` | перемешивание |
-| `r` | повтор: выкл / все / один |
-| `*` | в избранное и обратно |
-| `l` | показать / скрыть текст |
-| `w` | текст: все строки / только слово, которое поётся (крупно) |
-| `W` | шрифт режима «слово»: Lobster / Oswald / ваши из папки `fonts` (`.ttf`, `.otf`; читаются при запуске) |
-| `[` / `]` | сдвиг тайминга текста на 0.1 с раньше / позже |
-| `f` | полный экран: только текст и гифка (выход `f` или `Esc`) |
-| `x` | визуализатор звука: bars / mirror |
-| `v` | гифка: пикселями / блоками / ASCII |
-| `V` | гифка: целиком (fit) / заполнить с обрезкой (fill) / растянуть (stretch) |
-| `z` / `Z` | гифка крупнее / мельче: на сколько процентов режим fit может обрезать картинку |
-| `{` / `}` | предыдущая / следующая раскладка экрана |
-| `(` / `)` | предыдущая / следующая палитра цветов |
-| `F5` | **обновить**: заново прочитать `music/`, плейлисты и `gifs/` |
+| `Space` | pause / play (if nothing is playing, starts the selected track) |
+| `n` / `p` | next / previous track |
+| `←` / `→` | seek 5 seconds |
+| `Shift+←` / `Shift+→` | seek 30 seconds |
+| `+` / `-` | volume |
+| `s` | shuffle |
+| `r` | repeat: off / all / one |
+| `*` | add to favorites and back |
+| `l` | show / hide lyrics |
+| `w` | lyrics: all lines / only the word being sung (large) |
+| `W` | font of the "word" mode: Lobster / Oswald / your own from the `fonts` folder (`.ttf`, `.otf`; read at start) |
+| `[` / `]` | shift lyrics timing 0.1 s earlier / later |
+| `f` | full screen: only lyrics and the GIF (leave with `f` or `Esc`) |
+| `x` | sound visualizer: bars / mirror |
+| `v` | GIF: pixels / blocks / ASCII |
+| `V` | GIF: whole picture (fit) / fill with cropping (fill) / stretch (stretch) |
+| `z` / `Z` | GIF larger / smaller: how many percent fit mode may crop |
+| `{` / `}` | previous / next screen layout |
+| `(` / `)` | previous / next color palette |
+| `F5` | **refresh**: re-read `music/`, playlists and `gifs/` |
 
-Остальные клавиши (не переназначаются):
+The other keys (not rebindable):
 
-| Клавиша | Действие |
+| Key | Action |
 |---|---|
-| `F10` / `Ctrl+P` | меню |
-| `S` | настройки клавиш |
-| `E` | редактор раскладки |
-| `C` | редактор цветов |
-| `a` | добавить в плейлист |
-| `/` | поиск (Enter оставляет фильтр, Esc сбрасывает) |
-| `g` | выбрать гифку (`Tab` в окне: для плейлиста или глобальную) |
-| `t` | распознать текст заново |
-| `Tab` | Библиотека / Плейлисты / Избранное |
-| `Enter` | играть, открыть плейлист |
-| `c` / `e` / `d` | плейлисты: создать / переименовать / удалить |
-| `Esc` | назад, сбросить фильтр |
-| `Ctrl+↑` / `Ctrl+↓` | прокрутка текста без таймингов |
-| `? / F1` | справка (стрелки прокручивают) |
-| `q` | выход |
+| `F10` / `Ctrl+P` | menu |
+| `S` | key settings |
+| `E` | layout editor |
+| `C` | color editor |
+| `a` | add to a playlist |
+| `/` | search (Enter keeps the filter, Esc clears it) |
+| `g` | choose a GIF (`Tab` in the window: for the playlist or global) |
+| `t` | recognize lyrics again |
+| `Tab` | Library / Playlists / Favorites |
+| `Enter` | play, open a playlist |
+| `c` / `e` / `d` | playlists: create / rename / delete |
+| `Esc` | back, clear the filter |
+| `Ctrl+↑` / `Ctrl+↓` | scroll lyrics without timings |
+| `? / F1` | help (arrows scroll) |
+| `q` | quit |
 
-## Раскладки и редактор
+## Layouts and the editor
 
-Три готовые раскладки: **Classic** (как раньше, узкие окна сворачивают панели сами), **Lyrics** (текст и большая картинка, без списка) и **Cinema** (картинка сверху, текст под ней). Переключение по `}` и `{` (клавиши можно сменить в `S`).
+Three ready-made layouts: **Classic** (as before; narrow windows fold the panels away on their own), **Lyrics** (lyrics and a big picture, no list) and **Cinema** (the picture on top, lyrics under it). Switch with `}` and `{` (the keys can be changed in `S`).
 
-`E` открывает редактор. Панели показываются подписанными блоками (Library, Lyrics, Visual), выбранная обведена жирной рамкой, внизу подсказка простыми словами.
+`E` opens the editor. The panels are shown as labeled blocks (Library, Lyrics, Visual), the selected one has a bold frame, and a hint in plain words is at the bottom.
 
-- **Мышью:** потяните панель, чтобы переместить; потяните её правый нижний угол (значок ◢), чтобы изменить размер. Мышь включается только в редакторе, так что в остальное время текст в терминале выделяется как обычно.
-- **Клавиатурой:**
+- **With the mouse:** drag a panel to move it; drag its bottom right corner (the ◢ mark) to resize it. The mouse is on only in the editor, so the rest of the time you can select text in the terminal as usual.
+- **With the keyboard:**
 
-| Клавиша | Действие |
+| Key | Action |
 |---|---|
-| `Tab` / `Shift+Tab` | выбрать панель: Library, Lyrics, Visual, Sound, Player bar |
-| стрелки | двигать панель (шаг 5%) |
-| `Shift`+стрелки (или `Ctrl`+стрелки) | менять ширину и высоту |
-| `+` / `-` | масштаб по диагонали |
-| `Space` | показать / убрать выбранную панель (убранная остаётся рамкой, чтобы вернуть) |
-| `Delete` | **убрать** выбранную панель с экрана |
-| `Insert` | **добавить** убранную панель: откроется список убранных, `Enter` возвращает выбранную |
-| `1`, `2`, `3` | начать заново с готовой раскладки (Classic, Lyrics, Cinema) |
-| `Enter` | сохранить; готовую раскладку правка не меняет, а создаёт «Custom N» |
-| `F3` | сохранить как новую, старая остаётся |
-| `F4` | удалить свою раскладку |
-| `Esc` | отмена |
+| `Tab` / `Shift+Tab` | select a panel: Library, Lyrics, Visual, Sound, Player bar |
+| arrows | move the panel (5% steps) |
+| `Shift`+arrows (or `Ctrl`+arrows) | change width and height |
+| `+` / `-` | scale along the diagonal |
+| `Space` | show / hide the selected panel (a hidden one stays as an outline so you can bring it back) |
+| `Delete` | **remove** the selected panel from the screen |
+| `Insert` | **add** a removed panel: a list of removed ones opens, `Enter` brings back the chosen one |
+| `1`, `2`, `3` | start over from a ready-made layout (Classic, Lyrics, Cinema) |
+| `Enter` | save; editing a ready-made layout does not change it but creates "Custom N" |
+| `F3` | save as a new one, the old one stays |
+| `F4` | delete your own layout |
+| `Esc` | cancel |
 
-Панели можно класть друг на друга: порядок снизу вверх такой: Visual (картинка), Library, Sound, Lyrics. Так текст ложится поверх гифки, как субтитры.
+Panels can be laid on top of each other; the order from bottom to top is: Visual (the picture), Library, Sound, Lyrics. This way lyrics lie over the GIF like subtitles.
 
-Поверх картинки у панели Lyrics есть тёмный задний фон: то, что под ней, затемняется до фона темы. Насколько сильно, задаёт `lyrics_backdrop` в `[ui]` (0 без фона, 100 сплошной, по умолчанию 80).
+Over a picture, the Lyrics panel has a dark backdrop: what is under it is darkened towards the theme background. How strongly is set by `lyrics_backdrop` in `[ui]` (0 no backdrop, 100 solid, 80 by default).
 
-Размеры в процентах области над нижней панелью. Панель плеера всегда стоит внизу фиксированной высоты, её можно только убрать. Свои раскладки хранятся в `data/library.db` и запоминаются вместе с выбранной.
+Sizes are percentages of the area above the bottom bar. The player bar always stands at the bottom with a fixed height and can only be hidden. Your own layouts are stored in `data/library.db` and remembered together with the chosen one.
 
-## Визуализатор звука
+## Sound visualizer
 
-Панель **Sound** показывает спектр играющего звука. Низкие частоты слева, высокие справа.
+The **Sound** panel shows the spectrum of the playing sound. Low frequencies are on the left, high ones on the right.
 
-- **Ровные столбики:** они заполняют всю ширину панели без остатка, промежутки и ширина столбиков одинаковые на любом размере окна.
-- **Громкость подстраивается:** шкала сама следит за громкостью музыки, поэтому и тихая, и громкая песня заполняют панель одинаково (громкость плеера на это не влияет). Высокие частоты подтянуты, поэтому справа столбики не лежат на дне.
-- **Плавно:** соседние частоты смешиваются, столбики быстро растут и плавно опускаются, над ними остаются тонкие метки пиков, которые держатся и медленно падают. На паузе всё плавно опускается.
-- **Цвет** идёт по градиенту вашей палитры (акцент и дополнительные цвета) вдоль спектра и по высоте.
-- **Два стиля**, клавиша `x`: **bars** (столбики растут снизу) и **mirror** (растут от средней линии вверх и вниз). По умолчанию: `[ui] sound_style = "mirror"` в `config.toml`.
+- **Even bars:** they fill the whole width of the panel with nothing left over; the gaps and the bar widths are the same at any window size.
+- **Loudness adapts:** the scale follows the loudness of the music, so both quiet and loud songs fill the panel the same way (the player's volume does not affect it). High frequencies are lifted, so the bars on the right do not lie at the bottom.
+- **Smooth:** neighbouring frequencies are blended, bars rise fast and fall slowly, and thin peak marks above them hold and then fall slowly. On pause everything sinks smoothly.
+- **Color** follows the gradient of your palette (the accent and extra colors) along the spectrum and with height.
+- **Two styles**, key `x`: **bars** (bars grow from the bottom) and **mirror** (they grow up and down from the middle line). Default: `[ui] sound_style = "mirror"` in `config.toml`.
 
-Панель входит во все три готовые раскладки (Classic и Lyrics: под текстом, Cinema: справа внизу) и есть в редакторе раскладки как обычная панель. Сохранённые вами раньше раскладки получают её выключенной, её можно добавить клавишей `Insert` в редакторе.
+The panel is part of all three ready-made layouts (Classic and Lyrics: under the lyrics, Cinema: bottom right) and is in the layout editor as an ordinary panel. Layouts you saved earlier get it switched off; it can be added with `Insert` in the editor.
 
-## Цвета: палитры из N цветов
+## Colors: palettes of N colors
 
-`)` и `(` переключают палитры вперёд и назад: готовые (default, nord, gruvbox, light, mono), затем ваши. Выбор запоминается и главнее, чем `[theme]` в `config.toml`.
+`)` and `(` switch palettes forward and back: the ready-made ones (default, nord, gruvbox, light, mono), then yours. The choice is remembered and wins over `[theme]` in `config.toml`.
 
-`C` открывает редактор цветов, в котором плеер сразу перекрашивается. Цветов может быть от 2 до 12. По порядку они значат:
+`C` opens the color editor, where the player is recolored at once. There can be from 2 to 12 colors. In order, they mean:
 
-| № | Для чего |
+| № | Used for |
 |---|---|
-| 1 | фон |
-| 2 | текст |
-| 3 | акцент (рамки заголовков, выбранная строка, прогресс) |
-| 4 | приглушённый текст |
-| 5 | рамки |
-| 6-12 | дополнительные: вместе с акцентом по кругу красят текущую строку текста (и слова караоке) и заголовки панелей |
+| 1 | background |
+| 2 | text |
+| 3 | accent (title frames, the selected row, progress) |
+| 4 | dim text |
+| 5 | borders |
+| 6-12 | extra: together with the accent they color, in turn, the current lyric line (and karaoke words) and the panel titles |
 
-Если цветов меньше пяти, недостающие подмешиваются из фона и текста. Ставьте столько цветов, сколько хотите.
+If there are fewer than five colors, the missing ones are mixed from the background and text. Use as many colors as you like.
 
-Клавиши в редакторе: `↑`/`↓` выбор цвета; просто начните печатать значение (3 или 6 hex-цифр, например `ff79c6`) и нажмите `Enter`; `←`/`→` делают цвет темнее и светлее; `+` добавить цвет, `-` убрать выбранный; `F2` сохранить (правка готовой палитры создаёт «Mine N»), `F3` сохранить как новую, `F4` удалить свою, `Esc` отмена.
+Keys in the editor: `↑`/`↓` choose a color; just start typing the value (3 or 6 hex digits, for example `ff79c6`) and press `Enter`; `←`/`→` make the color darker and lighter; `+` adds a color, `-` removes the selected one; `F2` saves (editing a ready-made palette creates "Mine N"), `F3` saves as a new one, `F4` deletes your own, `Esc` cancels.
 
-## Настройки клавиш и глобальные клавиши
+## Key settings and global hotkeys
 
-`S` открывает окно: у каждого действия видна клавиша и галочка «Works everywhere».
+`S` opens a window: next to each action you see its key and a "Works everywhere" checkbox.
 
-- `Enter`: назначить новую клавишу (нажмите нужную; `Esc` отменяет). Можно с `Ctrl` и `Alt`, например `Ctrl+Alt+N`. Если клавиша занята другим действием, плеер скажет каким.
-- `Space`: включить или выключить «работает везде».
-- `Backspace`: вернуть клавишу по умолчанию.
+- `Enter`: assign a new key (press the one you want; `Esc` cancels). `Ctrl` and `Alt` are allowed, for example `Ctrl+Alt+N`. If the key is taken by another action, the player says which one.
+- `Space`: switch "works everywhere" on or off.
+- `Backspace`: restore the default key.
 
-Клавиша с галочкой срабатывает в любой программе: играете в полноэкранную игру, нажали `Ctrl+Alt+N` и трек переключился. Это **только Windows** (системные горячие клавиши). Чтобы плеер не перехватывал обычный ввод во всех программах, глобальной можно сделать только клавишу с `Ctrl` или `Alt` (или `F1`..`F24`). Если сочетание уже занято другой программой, внизу появится сообщение. На Linux глобальные клавиши не поддерживаются, обычные работают везде внутри плеера.
+A key with the checkbox works in any program: you are playing a full-screen game, press `Ctrl+Alt+N` and the track changes. This is **Windows only** (system hotkeys). So that the player does not intercept ordinary typing in all programs, only a key with `Ctrl` or `Alt` (or `F1`..`F24`) can be made global. If the combination is already taken by another program, a message appears at the bottom. Global keys are not supported on Linux; the ordinary ones work everywhere inside the player.
 
-Выбор хранится в `data/library.db` и сохраняется между запусками.
+The choice is stored in `data/library.db` and kept between runs.
 
-## Тексты
+## Lyrics
 
-Порядок поиска: файл `.lrc` рядом с треком, затем встроенный в теги текст, затем кеш, затем [LRCLIB](https://lrclib.net) (если включено), и наконец Whisper. Найденное кешируется в `data/lyrics/`, поэтому каждый трек ищется или распознаётся один раз.
+Search order: a `.lrc` file next to the track, then lyrics embedded in the tags, then the cache, then [LRCLIB](https://lrclib.net) (if enabled), and finally Whisper. What is found is cached in `data/lyrics/`, so each track is searched or recognized only once.
 
-### Режимы титров
+### Lyrics modes
 
-`w` переключает показ текста: **все строки** (как раньше, текущая подсвечена, слова караоке) и **одно слово**: на панели Lyrics крупно выводится ровно то слово, которое поётся сейчас, красивым шрифтом (буквы рисуются квадрантами, поэтому они гладкие). Если у текста есть пословные тайминги (караоке или Whisper), берутся они; если только построчные, время строки делится между словами по их длине. Цвет слова меняется по палитре. Шрифт меняется по `W`: **Lobster** (рукописный) и **Oswald** (строгий); оба поддерживают кириллицу. В режиме «слово» удобно сделать панель Lyrics большой (редактор раскладки `E`) и положить её поверх картинки в режиме blocks.
+`w` switches how lyrics are shown: **all lines** (as before, the current one highlighted, karaoke words) and **one word**: the Lyrics panel shows, large, exactly the word that is being sung right now, in a nice font (the letters are drawn with quadrant characters, so they are smooth). If the lyrics have per-word timings (karaoke or Whisper), they are used; if there are only per-line ones, the time of the line is divided between the words by their length. The color of the word changes along the palette. The font changes with `W`: **Lobster** (handwritten) and **Oswald** (strict); both support Cyrillic. In word mode it is handy to make the Lyrics panel large (layout editor `E`) and lay it over the picture in blocks mode.
 
-Шрифты Lobster и Oswald распространяются по лицензии SIL Open Font License (`assets/fonts/`).
+**Your own fonts.** Put `.ttf` or `.otf` files into the `fonts` folder (it is created at the first start, next to `music/`) and restart the player: they join the `W` cycle after Lobster and Oswald, under the file name. If a font has no Cyrillic letters, Russian words will come out empty: that is a limit of the font.
 
-В `config.toml`: `[lyrics] display = "word"` и `word_font = "oswald"`.
+Lobster and Oswald are distributed under the SIL Open Font License (`assets/fonts/`).
+
+In `config.toml`: `[lyrics] display = "word"` and `word_font = "oswald"`.
 
 ### Whisper
 
-Когда текст нигде не нашёлся, а трек играет уже 3 секунды, плеер предложит распознать его. При первом разе он **спросит разрешения** скачать модель с Hugging Face (tiny ≈ 75 МБ, base ≈ 142 МБ, small ≈ 466 МБ, medium ≈ 1,5 ГБ) и покажет её размер. Модель сохраняется в `data/models/` и скачивается один раз. Распознавание идёт в фоне на процессоре, музыка не тормозит; прогресс виден внизу.
+When lyrics are found nowhere and a track has been playing for 3 seconds, the player offers to recognize them. The first time it **asks permission** to download a model from Hugging Face (tiny ≈ 75 MB, base ≈ 142 MB, small ≈ 466 MB, medium ≈ 1.5 GB) and shows its size. The model is saved in `data/models/` and downloaded once. Recognition runs in the background on the processor, music does not slow down; progress is shown at the bottom.
 
-Качество на пении с громкой музыкой у `tiny` и `base` скромное; для лучшего результата поставьте `model = "small"` или `"medium"`. Фильтр отбрасывает типичные «галлюцинации» (`[Music]`, «Thanks for watching», зацикленные повторы).
+On singing over loud music, `tiny` and `base` give modest quality; for a better result set `model = "small"` or `"medium"`. A filter drops typical "hallucinations" (`[Music]`, "Thanks for watching", looped repeats).
 
-## Гифки
+## GIFs
 
-Положите gif / png / jpg в `gifs/` и нажмите `g`. Одна гифка глобальная, а у каждого плейлиста может быть своя (она показывается, когда трек запущен из этого плейлиста). GIF анимируется со своими задержками кадров и стоит на паузе вместе с музыкой. Панель с гифкой видна, когда окно шире 110 колонок; в полном экране `F` она показывается всегда.
+Put gif / png / jpg files into `gifs/` and press `g`. One GIF is global, and each playlist can have its own (it is shown when the track was started from that playlist). A GIF is animated with its own frame delays and pauses together with the music. The GIF panel is visible when the window is wider than 110 columns; in full screen (`f`) it is always shown.
 
-Клавиша `V` переключает вписывание картинки в панель: **fit** (по умолчанию: картинка видна с правильными пропорциями, свободное место заполняет её размытая тёмная копия, как в видеоплеерах), **fill** (заполнить панель с обрезкой краёв) и **stretch** (растянуть, пропорции искажаются). В режиме fit можно разрешить обрезать часть картинки, чтобы сама гифка была крупнее, а размытого фона меньше: клавиша `z` увеличивает допуск обрезки на 10% (картинка крупнее), `Z` уменьшает (картинка мельче, целее). По умолчанию допуск 35%, его можно задать в `[visuals]`: `max_crop = 35` (0 значит ничего не обрезать, 90 почти как fill). Если гифка не выбрана, показывается первая из `gifs/`; выбор «(none)» отключает показ. Клавиша `v` переключает три режима показа:
+The `V` key switches how the picture fits the panel: **fit** (default: the picture is shown with the right proportions, and the free space is filled with a blurred dark copy of it, like in video players), **fill** (fill the panel, cropping the edges) and **stretch** (stretch it, the proportions are distorted). In fit mode you can allow some of the picture to be cropped so that the GIF itself is larger and the blurred background smaller: `z` raises the crop allowance by 10% (a larger picture), `Z` lowers it (a smaller, more complete picture). The default allowance is 35%; it can be set in `[visuals]`: `max_crop = 35` (0 means crop nothing, 90 is almost like fill). If no GIF is chosen, the first one from `gifs/` is shown; choosing "(none)" turns the picture off. The `v` key switches three display modes:
 
-- **picture**: настоящие пиксели (sixel, kitty, iTerm2), как было раньше, полное качество. Но терминалу тяжело перерисовывать большую картинку на каждом кадре, поэтому анимация может идти рывками, а текст поверх такой картинки нарисовать нельзя. В терминале без графики этот режим сам рисует блоками;
-- **blocks**: картинка из символов-квадрантов (в каждой ячейке 2×2 пикселя с двумя цветами), плавная, и поверх неё можно класть другие панели;
-- **ascii**: цветные символы по яркости (длинная шкала из 70 символов, контраст подтягивается под картинку, фон ячейки затемнён цветом пикселя).
+- **picture**: real pixels (sixel, kitty, iTerm2), full quality. But a terminal has a hard time redrawing a big picture on every frame, so the animation may be jerky, and text cannot be drawn over such a picture. In a terminal without graphics this mode draws with blocks by itself;
+- **blocks**: the picture is made of quadrant characters (2×2 pixels with two colors in each cell), smooth, and other panels can be laid over it;
+- **ascii**: colored characters by brightness (a long scale of 70 characters, contrast adjusted to the picture, the cell background darkened with the pixel's color).
 
-Если поверх картинки лежит другая панель, режим picture сам рисует блоками, чтобы текст был виден. Режим по умолчанию: `mode = "blocks"` (или `"ascii"`) в `[visuals]`.
+If another panel lies over the picture, the picture mode draws with blocks by itself so that the text is visible. The default mode is `mode = "blocks"` (or `"ascii"`) in `[visuals]`.
 
-Новые файлы в `gifs/` и `music/` подхватываются по `F5`.
+New files in `gifs/` and `music/` are picked up with `F5`.
 
-Терминал сам определяется: kitty, WezTerm, iTerm2 и другие терминалы с графикой показывают настоящую картинку, остальные (в том числе обычные Linux-терминалы и Windows Terminal) рисуют полублоками. Если картинка выглядит странно, задайте `protocol = "halfblocks"`.
+The terminal is detected automatically: kitty, WezTerm, iTerm2 and other terminals with graphics show the real picture, the rest (including ordinary Linux terminals and Windows Terminal) draw with half blocks. If the picture looks strange, set `protocol = "halfblocks"`.
 
-## Настройки (`config.toml`)
+## Settings (`config.toml`)
 
-Создаётся при первом запуске с комментариями. Любую строку можно удалить, будет значение по умолчанию. Ошибка в файле не мешает запуску: показывается сообщение и берутся значения по умолчанию.
+Created at the first start with comments. Any line can be deleted, then the default is used. A mistake in the file does not stop the start: a message is shown and the defaults are used.
 
 ```toml
 [ui]
-animations = true          # плавные появления и подсветки
-lyrics_backdrop = 80       # тёмный фон под текстом песни поверх картинки, 0-100
-sound_style = "bars"       # визуализатор звука: bars / mirror (клавиша x)
+animations = true          # smooth appearing and highlights
+lyrics_backdrop = 80       # dark backdrop under lyrics over a picture, 0-100
+sound_style = "bars"       # sound visualizer: bars / mirror (key x)
 
 [theme]
 preset = "default"         # default / nord / gruvbox / light / mono
-# background = "#14141c"   # любой цвет можно переопределить
+# background = "#14141c"   # any color can be overridden
 # foreground = "#e6e6ef"
 # dim = "#6c6c80"
 # accent = "#ff79c6"
 # border = "#44475a"
 
 [audio]
-volume = 0.8               # громкость при запуске, 0.0 - 1.0
-seek_step_secs = 5         # шаг перемотки
+volume = 0.8               # volume at start, 0.0 - 1.0
+seek_step_secs = 5         # seek step
 
 [lyrics]
-online = true              # искать тексты в LRCLIB
+online = true              # look up lyrics on LRCLIB
 
 [whisper]
-enabled = true             # распознавать тексты, которых нет
+enabled = true             # recognize lyrics that are missing
 model = "base"             # tiny / base / small / medium
-language = "auto"          # "en", "ru", ... или auto
+language = "auto"          # "en", "ru", ... or auto
 
 [visuals]
 protocol = "auto"          # auto / kitty / sixel / iterm2 / halfblocks
-mode = "picture"           # picture / blocks / ascii (клавиша v)
-fit = "fit"                # fit / fill / stretch (клавиша V)
-max_crop = 35              # сколько % картинки fit может обрезать, 0-90 (клавиши z / Z)
-pause_with_music = true    # гифка стоит, когда стоит музыка
+mode = "picture"           # picture / blocks / ascii (key v)
+fit = "fit"                # fit / fill / stretch (key V)
+max_crop = 35              # how many % of the picture fit may crop, 0-90 (keys z / Z)
+pause_with_music = true    # the GIF stands still when the music does
 ```
 
-## Если что-то не работает
+## Troubleshooting
 
-- **Нет звука.** Проверьте устройство вывода по умолчанию в системе. Ошибка открытия устройства показывается внизу. В Linux нужен ALSA (`libasound2`).
-- **Не видно треков.** Формат должен быть из списка выше, файл лежать в `music/`. Битые файлы пропускаются и описаны в `data/logs/`.
-- **Сборка с Whisper падает** на `libclang` или `cmake`: поставьте их (см. выше) или соберите с `--no-default-features`.
-- **Тексты не находятся онлайн.** Проверьте интернет или выключите `online`; тексты всегда можно положить как `.lrc` рядом с треком (то же имя файла).
-- Подробности всегда в `data/logs/synq.log`.
+- **No sound.** Check the default output device in the system. An error opening the device is shown at the bottom. On Linux, ALSA (`libasound2`) is needed.
+- **No tracks visible.** The format must be one from the list above and the file must lie in `music/`. Broken files are skipped and described in `data/logs/`.
+- **The build with Whisper fails** on `libclang` or `cmake`: install them (see above) or build with `--no-default-features`.
+- **Lyrics are not found online.** Check the internet or turn `online` off; lyrics can always be put as a `.lrc` file next to the track (the same file name).
+- Details are always in `data/logs/synq.log`.
 
-## Разработка
+## Development
 
 ```bash
 cargo build
 cargo clippy --all-targets -- -D warnings
-cargo test                       # с Whisper
-cargo test --no-default-features # без Whisper
+cargo test                       # with Whisper
+cargo test --no-default-features # without Whisper
 ```
 
-Реальный тест распознавания (скачивает модель, по умолчанию пропускается):
+A real recognition test (downloads a model, skipped by default):
 
 ```bash
-SYNQ_TEST_AUDIO=речь.wav cargo test real_model -- --ignored --nocapture
+SYNQ_TEST_AUDIO=speech.wav cargo test real_model -- --ignored --nocapture
 ```
